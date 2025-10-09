@@ -58,3 +58,19 @@ int main(int argc, char** argv )
 	return 0;
 }
 
+
+Mat to442_grayscale(Mat input){
+	int height=input.rows;
+	int length=input.cols;
+	Mat output(height,length,CV_8U);
+	for(int i=0;i<height;i++){
+		for(int j=0;j<length;j++){
+			printf("%d, %d\n",i,j);
+		}
+	}	      
+       return output;	
+}
+
+//Mat to443_sobel(Mat){
+
+//}
