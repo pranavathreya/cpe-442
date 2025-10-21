@@ -3,7 +3,91 @@
 #include <stdlib.h>
 #include <pthread.h>
 
+#define NTHREADS 4
+
 using namespace cv;
+
+void grayScale(Mat* frame, Mat* gray_frame);
+void sobelFilter(Mat* gray_frame, Mat* sobel_frame);
+
+struct matFrames {
+		Mat* src;
+		Mat* dst;
+};
+
+int main(int argc, char** argv )
+{
+    pthread_t thread_id[NTHREADS];
+	struct matFrames grayThreadArgs[NTHREADS];
+	struct matFrames sobelThreadArgs[NTHREADS];
+		
+
+    if ( argc != 2 )
+    {
+         printf("usage: DisplayVideo <Video_Path>\n");
+         return -1;
+    }
+
+    // Open the video file
+    VideoCapture cap(argv[1]);
+	
+	// Check if the video was opened successfully
+	if (!cap.isOpened()) {
+		printf("Error: Could not open video file.\n");
+		return -1;
+	} else {
+		printf("Video file opened successfully\n");
+	}
+	// Read the frames of the video one by one
+	Mat frame;
+	int cols, rows;	
+	while (true) {
+		bool ret = cap.read(frame);
+
+		if (!ret) {
+			printf("Last frame reached or error.\n");
+			break;
+		}
+
+	
+		cols = frame.cols, rows = frame.rows;
+		Mat gray_frame(rows, cols, CV_8UC1);
+		
+		// Split up frame into four
+			
+
+		// Assign arg struct values
+		struct matFrames mf1;
+		mf1.src = &frame_1st_quarter;
+		mf1.dst = &gray_frame_1st_quarter;
+
+		pthread_create( &thread_id[0], NULL, *(*grayScale), NULL );
+		pthread_create( &thread_id[1], NULL, *(*grayScale), NULL );
+		pthread_create( &thread_id[2], NULL, *(*grayScale), NULL );
+		pthread_create( &thread_id[3], NULL, *(*grayScale), NULL );
+
+		pthread_join( thread_id[j], NULL); 
+		//cv::imshow("Gray Frame", gray_frame);
+
+
+		Mat sobel_frame(rows, cols, CV_8UC1);
+		sobelFilter(&gray_frame,&sobel_frame);
+		cv::imshow("Sobel Frame", sobel_frame);
+		//cv::waitKey(0);
+
+		// Wait for 25ms before going to next frame
+		// Check if 'q' key is pressed to exit
+		char c = (char)cv::waitKey(25);
+		if (c == 'q') {
+			break;
+		}
+	}
+	// Clean up
+	cap.release();
+	cv::destroyAllWindows();
+	return 0;
+}
+
 
 void grayScale(Mat* frame, Mat* gray_frame){
 	// Apply grayscale conversion into my program flow using CCIR 601 standard
@@ -58,57 +142,5 @@ void sobelFilter(Mat* gray_frame, Mat* sobel_frame){
 		}
 	}
 }
-
-
-int main(int argc, char** argv )
-{
-    if ( argc != 2 )
-    {
-        printf("usage: DisplayVideo <Video_Path>\n");
-        return -1;
-    }
-
-    // Open the video file
-    VideoCapture cap(argv[1]);
-	
-	// Check if the video was opened successfully
-	if (!cap.isOpened()) {
-		printf("Error: Could not open video file.\n");
-		return -1;
-	} else {
-		printf("Video file opened successfully\n");
-	}
-	// Read the frames of the video one by one
-	Mat frame;
-	while (true) {
-		bool ret = cap.read(frame);
-
-		if (!ret) {
-			printf("Last frame reached or error.\n");
-			break;
-		}
-
-		int cols = frame.cols, rows = frame.rows;
-		Mat gray_frame(rows, cols, CV_8UC1);
-		grayScale(&frame,&gray_frame);
-		//cv::imshow("Gray Frame", gray_frame);
-
-
-		Mat sobel_frame(rows, cols, CV_8UC1);
-		sobelFilter(&gray_frame,&sobel_frame);
-		cv::imshow("Sobel Frame", sobel_frame);
-		//cv::waitKey(0);
-
-		// Wait for 25ms before going to next frame
-		// Check if 'q' key is pressed to exit
-		char c = (char)cv::waitKey(25);
-		if (c == 'q') {
-			break;
-		}
-	}
-	// Clean up
-	cap.release();
-	cv::destroyAllWindows();
-	return 0;
-}
+  
 
