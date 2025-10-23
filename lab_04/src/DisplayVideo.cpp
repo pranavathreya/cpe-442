@@ -3,10 +3,12 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <algorithm>
+#include <chrono>
 
 #define NTHREADS 4
 
 using namespace cv;
+using namespace std::chrono;
 
 void* grayScale(void *args);
 void* sobelThread(void *args);
@@ -38,14 +40,18 @@ int main(int argc, char** argv)
         printf("Video file opened successfully\n");
     }
 
-    // Read the frames of the video one by one
     Mat frame;
+    double fps = 0.0;
+    auto last_time = high_resolution_clock::now();
+
     while (true) {
         bool ret = cap.read(frame);
         if (!ret) {
             printf("Last frame reached or error.\n");
             break;
         }
+
+        auto start_time = high_resolution_clock::now();
 
         const int rows = frame.rows;
         const int cols = frame.cols;
@@ -77,30 +83,36 @@ int main(int argc, char** argv)
             pthread_join(thread_id[q], NULL);
         }
 
-        //imshow("Gray Frame", gray_frame);
+        auto end_time = high_resolution_clock::now();
+        double frame_time = duration<double>(end_time - start_time).count();
+        fps = 1.0 / frame_time;
+
+        // Display FPS on the Sobel frame
+        char fps_text[50];
+        sprintf(fps_text, "FPS: %.2f", fps);
+        putText(sobel_frame, fps_text, Point(10, 30), FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255), 2);
+
+        // imshow("Gray Frame", gray_frame); // Commented out as requested
         imshow("Sobel Frame", sobel_frame);
 
         char c = (char)waitKey(25);
         if (c == 'q') break;
     }
 
-    // Clean up
     cap.release();
     destroyAllWindows();
     return 0;
 }
 
 void* grayScale(void* args){
-    // Cast args to matFrames ptr
     matFrames* mf = static_cast<matFrames*>(args);
     Mat* frame = mf->src;      // BGR input
     Mat* gray_frame = mf->dst; // grayscale output
     int quarter = mf->quarter; // 1..4
 
-    // Apply grayscale conversion using CCIR 601 / OpenCV coefficients
     const int N = gray_frame->rows;
     const int start_row = (quarter - 1) * N / 4;
-    const int end_row   = (quarter) * N / 4; // exclusive
+    const int end_row   = (quarter) * N / 4;
 
     for (int i = start_row; i < end_row; ++i) {
         const Vec3b* frame_i = frame->ptr<Vec3b>(i);
@@ -116,8 +128,6 @@ void* grayScale(void* args){
 }
 
 void* sobelThread(void* args){
-    // Threaded Sobel, mirroring the grayscale threading strategy
-    // Each thread processes a contiguous quarter of rows (row-wise partition).
     matFrames* mf = static_cast<matFrames*>(args);
     Mat* gray = mf->src;     // grayscale input
     Mat* sobel = mf->dst;    // sobel output (8-bit)
@@ -126,13 +136,11 @@ void* sobelThread(void* args){
     const int rows = gray->rows;
     const int cols = gray->cols;
 
-    // Compute this quarter's row range [start_row, end_row) and clamp to avoid borders
     int start_row = (quarter - 1) * rows / 4;
-    int end_row   = (quarter) * rows / 4; // exclusive
+    int end_row   = (quarter) * rows / 4;
 
-    // Sobel needs neighbors, so skip the first and last rows and columns
     start_row = std::max(1, start_row);
-    end_row   = std::min(rows - 1, end_row); // still exclusive
+    end_row   = std::min(rows - 1, end_row);
 
     for (int i = start_row; i < end_row; ++i) {
         const uint8_t* prevRow = gray->ptr<uint8_t>(i - 1);
@@ -148,7 +156,7 @@ void* sobelThread(void* args){
             int gy = - prevRow[j - 1] - 2 * prevRow[j] - prevRow[j + 1]
                      + nextRow[j - 1] + 2 * nextRow[j] + nextRow[j + 1];
 
-            int mag = std::abs(gx) + std::abs(gy); // L1 magnitude (fast)
+            int mag = std::abs(gx) + std::abs(gy);
             if (mag > 255) mag = 255;
             outRow[j] = static_cast<uint8_t>(mag);
         }
