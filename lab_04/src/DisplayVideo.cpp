@@ -7,20 +7,18 @@
 
 using namespace cv;
 
-void grayScale(Mat* frame, Mat* gray_frame);
+void* grayScale(void *args);
 void sobelFilter(Mat* gray_frame, Mat* sobel_frame);
 
 struct matFrames {
 		Mat* src;
 		Mat* dst;
+		int quarter;
 };
 
 int main(int argc, char** argv )
 {
     pthread_t thread_id[NTHREADS];
-	struct matFrames grayThreadArgs[NTHREADS];
-	struct matFrames sobelThreadArgs[NTHREADS];
-		
 
     if ( argc != 2 )
     {
@@ -53,26 +51,43 @@ int main(int argc, char** argv )
 		cols = frame.cols, rows = frame.rows;
 		Mat gray_frame(rows, cols, CV_8UC1);
 		
-		// Split up frame into four
-			
 
 		// Assign arg struct values
 		struct matFrames mf1;
-		mf1.src = &frame_1st_quarter;
-		mf1.dst = &gray_frame_1st_quarter;
+		mf1.src = &frame;
+		mf1.dst = &gray_frame;
+		mf1.quarter = 1;
 
-		pthread_create( &thread_id[0], NULL, *(*grayScale), NULL );
-		pthread_create( &thread_id[1], NULL, *(*grayScale), NULL );
-		pthread_create( &thread_id[2], NULL, *(*grayScale), NULL );
-		pthread_create( &thread_id[3], NULL, *(*grayScale), NULL );
+		struct matFrames mf2;
+		mf2.src = &frame;
+		mf2.dst = &gray_frame;
+		mf2.quarter = 2;
+		
+		struct matFrames mf3;
+		mf3.src = &frame;
+		mf3.dst = &gray_frame;
+		mf3.quarter = 3;
+		
+		struct matFrames mf4;
+		mf4.src = &frame;
+		mf4.dst = &gray_frame;
+		mf4.quarter = 4;
+		
+		pthread_create( &thread_id[0], NULL, grayScale, (void *) &mf1 );
+		pthread_create( &thread_id[1], NULL, grayScale, (void *) &mf2 );
+		pthread_create( &thread_id[2], NULL, grayScale, (void *) &mf3 );
+		pthread_create( &thread_id[3], NULL, grayScale, (void *) &mf4 );
 
-		pthread_join( thread_id[j], NULL); 
-		//cv::imshow("Gray Frame", gray_frame);
+		for(int j=0; j < 1 /*NTHREADS*/; j++)
+		{
+			pthread_join( thread_id[j], NULL); 
+		}
+		cv::imshow("Gray Frame", gray_frame);
 
 
-		Mat sobel_frame(rows, cols, CV_8UC1);
-		sobelFilter(&gray_frame,&sobel_frame);
-		cv::imshow("Sobel Frame", sobel_frame);
+		//Mat sobel_frame(rows, cols, CV_8UC1);
+		//sobelFilter(&gray_frame,&sobel_frame);
+		//cv::imshow("Sobel Frame", sobel_frame);
 		//cv::waitKey(0);
 
 		// Wait for 25ms before going to next frame
@@ -89,15 +104,26 @@ int main(int argc, char** argv )
 }
 
 
-void grayScale(Mat* frame, Mat* gray_frame){
+void* grayScale(void* args){
+	// Cast args to matFrames ptr
+	matFrames* mf = static_cast<matFrames*>(args);
+	Mat* frame = mf->src;
+	Mat* gray_frame = mf->dst;
+	int quarter = mf->quarter;
+
 	// Apply grayscale conversion into my program flow using CCIR 601 standard
 	// OpenCV's COLOR_BGR2GRAY uses the coefficients 0.299, 0.587, and 0.114
 	// source: https://docs.opencv.org/3.4/de/d25/imgproc_color_conversions.html#color_convert_rgb_gray
 	//cv::cvtColor(frame, gray_frame, cv::COLOR_BGR2GRAY);
-	for (int i=0; i < gray_frame->rows; i++) {
+	int N = gray_frame->rows;
+	int start_row = (quarter - 1) * N / 4;
+	const Vec3b* frame_i;
+	uint8_t* gray_frame_i;
+	for (int i=0; i < (N/4); i++) {
+		// Point to next row		
+		frame_i = frame->ptr<Vec3b>(start_row+i);
+		gray_frame_i = gray_frame->ptr<uint8_t>(start_row+i);
 		// Vec3b represents a single BGR pixel
-		const Vec3b* frame_i = (*frame).ptr<Vec3b>(i);
-		uint8_t* gray_frame_i = (*gray_frame).ptr<uint8_t>(i);
 		for (int j=0; j < gray_frame->cols; j++) {
 			uint8_t B = frame_i[j][0];
 			uint8_t G = frame_i[j][1];
@@ -108,7 +134,10 @@ void grayScale(Mat* frame, Mat* gray_frame){
 			// floating points to double, hence the typecasting back to uint8_t
 			gray_frame_i[j] = static_cast<uint8_t>(0.114 * B + 0.587 * G + 0.299 * R);
 		}
+	//	printf("start_row: %d, frame_i: %ld\n", start_row, (long) frame_i);
 	}
+
+	return gray_frame;
 }
 
 void sobelFilter(Mat* gray_frame, Mat* sobel_frame){
