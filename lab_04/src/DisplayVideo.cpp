@@ -77,7 +77,7 @@ int main(int argc, char** argv)
             pthread_join(thread_id[q], NULL);
         }
 
-        imshow("Gray Frame", gray_frame);
+        //imshow("Gray Frame", gray_frame);
         imshow("Sobel Frame", sobel_frame);
 
         char c = (char)waitKey(25);
