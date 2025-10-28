@@ -1,0 +1,7 @@
+rm -f build/DisplayVideo.o  bin/DisplayVideo			
+g++				 -c -Wall -O0 `pkg-config --cflags opencv4`	 src/DisplayVideo.cpp		  -o build/DisplayVideo.o 
+src/DisplayVideo.cpp: In function ‘void* grayScale(void*)’:
+src/DisplayVideo.cpp:137:1: warning: no return statement in function returning non-void [-Wreturn-type]
+  137 | }
+      | ^
+g++				 build/DisplayVideo.o  `pkg-config --libs opencv4`    -o bin/DisplayVideo			
