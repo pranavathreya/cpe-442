@@ -42,7 +42,8 @@ int main(int argc, char** argv)
 
     Mat frame;
     double fps = 0.0;
-    auto last_time = high_resolution_clock::now();
+    int count=0;
+    double sum_time=0;
 
     while (true) {
         bool ret = cap.read(frame);
@@ -85,7 +86,12 @@ int main(int argc, char** argv)
 
         auto end_time = high_resolution_clock::now();
         double frame_time = duration<double>(end_time - start_time).count();
-        fps = 1.0 / frame_time;
+        sum_time+=frame_time;
+		if(count%10==0){
+			fps = 10.0 / sum_time;
+			sum_time=0;
+		}
+		count++;
 
         // Display FPS on the Sobel frame
         char fps_text[50];
@@ -138,7 +144,8 @@ void* sobelThread(void* args){
 
     int start_row = (quarter - 1) * rows / 4;
     int end_row   = (quarter) * rows / 4;
-
+    
+    //Ensure we dont go out of bounds
     start_row = std::max(1, start_row);
     end_row   = std::min(rows - 1, end_row);
 
