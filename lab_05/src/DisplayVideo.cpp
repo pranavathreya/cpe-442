@@ -133,7 +133,7 @@ void* grayScale(void* args){
     for (int i = start_row; i < end_row; ++i) {
         uint8_t* currRow = frame->ptr<uint8_t>(i);
         uint8_t* currGrayRow = gray->ptr<uint8_t>(i);
-		for (int i = 0; i < cols; ++i, currRow += 8 * 3, currGrayRow += 8) {
+		for (int j = 0; j < cols; j+=8, currRow += 8 * 3, currGrayRow += 8) {
 				src = vld3_u8(currRow);
 
 				temp = vmull_u8(src.val[0], w_b);
