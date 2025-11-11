@@ -123,6 +123,7 @@ void* grayScale(void* args){
 	const int num_pixels= rows*cols;
     const int start_row = (quarter - 1) * N / 4;
     const int end_row   = (quarter) * N / 4;
+    const int end_pixel = num_pixels/4;
 
     uint8x8x3_t src;
 	uint8x8_t       w_r = vdup_n_u8(77);
@@ -130,10 +131,9 @@ void* grayScale(void* args){
 	uint8x8_t       w_b = vdup_n_u8(29);
 	uint16x8_t      temp;
 	uint8x8_t       result;
-    for (int i = start_row; i < end_row; ++i) {
-        uint8_t* currRow = frame->ptr<uint8_t>(i);
-        uint8_t* currGrayRow = gray->ptr<uint8_t>(i);
-		for (int j = 0; j < cols; j+=8, currRow += 8 * 3, currGrayRow += 8) {
+		uint8_t* currRow = frame->ptr<uint8_t>(start_row);
+		uint8_t* currGrayRow = gray->ptr<uint8_t>(start_row);
+		for (int j = 0; j < end_pixel; j+=8, currRow += 8 * 3, currGrayRow += 8) {
 				src = vld3_u8(currRow);
 
 				temp = vmull_u8(src.val[0], w_b);
@@ -145,7 +145,6 @@ void* grayScale(void* args){
 
 				vst1_u8(currGrayRow, result);
 		}
-	}
 	return nullptr;
 }
 
