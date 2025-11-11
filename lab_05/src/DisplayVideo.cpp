@@ -133,18 +133,18 @@ void* grayScale(void* args){
     for (int i = start_row; i < end_row; ++i) {
         uint8_t* currRow = frame->ptr<uint8_t>(i);
         uint8_t* currGrayRow = gray->ptr<uint8_t>(i);
-			for (int i = 0; i < cols; ++i, frame += 8 * 3, gray += 8) {
-					src = vld3_u8(frame);
+		for (int i = 0; i < cols; ++i, currRow += 8 * 3, gray += 8) {
+				src = vld3_u8(currRow);
 
-					temp = vmull_u8(src.val[0], w_b);
+				temp = vmull_u8(src.val[0], w_b);
 
-					temp = vmlal_u8(temp, src.val[1], w_g);
-					temp = vmlal_u8(temp, src.val[2], w_r);
+				temp = vmlal_u8(temp, src.val[1], w_g);
+				temp = vmlal_u8(temp, src.val[2], w_r);
 
-					result = vshrn_n_u16(temp, 8);
+				result = vshrn_n_u16(temp, 8);
 
-					vst1_u8(currGrayRow, result);
-			}
+				vst1_u8(currGrayRow, result);
+		}
 	}
 	return nullptr;
 }
