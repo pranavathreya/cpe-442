@@ -85,16 +85,17 @@ int main(int argc, char** argv)
             pthread_join(thread_id[q], NULL);
         }
 
-        // imshow("Gray Frame", gray_frame); // Commented out as requested
+        // Display FPS on the Sobel frame
+        char fps_text[50];
+        sprintf(fps_text, "FPS: %.2f", fps);
+        putText(sobel_frame, fps_text, Point(10, 30), FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255), 2);
+        
+	// imshow("Gray Frame", gray_frame); // Commented out as requested
         imshow("Sobel Frame", sobel_frame);
 
         char c = (char)waitKey(25);
         if (c == 'q') break;
         
-        // Display FPS on the Sobel frame
-        char fps_text[50];
-        sprintf(fps_text, "FPS: %.2f", fps);
-        putText(sobel_frame, fps_text, Point(10, 30), FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255), 2);
 	
 	auto end_time = high_resolution_clock::now();
         double frame_time = duration<double>(end_time - start_time).count();
