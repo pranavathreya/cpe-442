@@ -61,7 +61,6 @@ int main(int argc, char** argv)
         Mat gray_frame(rows, cols, CV_8UC1);
         Mat sobel_frame(rows, cols, CV_8UC1, Scalar(0));
 
-        // --- GRAYSCALE (multithreaded like before) ---
         matFrames mfs[NTHREADS];
         for (int q = 0; q < NTHREADS; ++q) {
             mfs[q].src = &frame;
@@ -73,7 +72,6 @@ int main(int argc, char** argv)
             pthread_join(thread_id[q], NULL);
         }
 
-        // --- SOBEL (implemented the same way: row-wise quarters, pthreads) ---
         matFrames sargs[NTHREADS];
         for (int q = 0; q < NTHREADS; ++q) {
             sargs[q].src = &gray_frame;   // source is the grayscale image
@@ -90,7 +88,6 @@ int main(int argc, char** argv)
         sprintf(fps_text, "FPS: %.2f", fps);
         putText(sobel_frame, fps_text, Point(10, 30), FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255), 2);
         
-	// imshow("Gray Frame", gray_frame); // Commented out as requested
         imshow("Sobel Frame", sobel_frame);
 
         char c = (char)waitKey(25);
@@ -228,26 +225,7 @@ void* sobelThread(void* args) {
 
             vst1_u8(outRow + j, mag8);
         }
-
-        // Scalar tail for remaining pixels (and for small widths)
-        for (; j < cols - 1; ++j) {
-            int gx =  (int)prevRow[j + 1] - (int)prevRow[j - 1]
-                    + 2*((int)currRow[j + 1] - (int)currRow[j - 1])
-                    + (int)nextRow[j + 1] - (int)nextRow[j - 1];
-
-            int gy =  ((int)nextRow[j - 1] + 2*(int)nextRow[j] + (int)nextRow[j + 1])
-                    - ((int)prevRow[j - 1] + 2*(int)prevRow[j] + (int)prevRow[j + 1]);
-
-            int mag = std::abs(gx) + std::abs(gy);
-            if (mag > 255) mag = 255;
-            outRow[j] = static_cast<uint8_t>(mag);
-        }
-
-        // (Optional) define borders; here we leave outRow[0] and outRow[cols-1] unchanged
-        // or set to 0 if you prefer:
-        // outRow[0] = outRow[cols-1] = 0;
     }
-
     return nullptr;
 }
 
