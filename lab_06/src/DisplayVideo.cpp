@@ -114,7 +114,6 @@ void* grayScale(void* args){
     const int cols = gray->cols;
 	const int num_pixels= rows*cols;
     const int start_row = (quarter - 1) * N / 4;
-    const int end_row   = (quarter) * N / 4;
     const int end_pixel = num_pixels/4;
 
     uint8x8x3_t src;
