@@ -18,7 +18,7 @@ HFILES =				# .h Header file list
 SOURCES := $(wildcard $(SRCDIR)/*.cpp)
 OFILES := $(patsubst $(SRCDIR)/%.cpp,$(BUILDDIR)/%.o,$(SOURCES)) # Object files
 BINNAME = $(BINDIR)/DisplayVideo			# executable file name
-LDFLAGS = `pkg-config --libs opencv4`   # Linker flags to locate opencv
+LDFLAGS = `pkg-config --libs opencv4 papi`   # Linker flags to locate opencv
 
 all: clean compile link
 
