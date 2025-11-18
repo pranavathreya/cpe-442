@@ -24,12 +24,10 @@ int main(int argc, char** argv)
 	int count=0;
 	int start_time=0;
 	int stop_time=0;
-	int fps=0;
+	float fps=0;
 
 	char c; 
 	bool ret;
-	const int rows;
-	const int cols;
 
     pthread_t thread_id[NTHREADS];
 
@@ -62,11 +60,8 @@ int main(int argc, char** argv)
             break;
         }
         
-		rows = frame.rows;
-        cols = frame.cols;
-
-        Mat gray_frame(rows, cols, CV_8UC1);
-        Mat sobel_frame(rows, cols, CV_8UC1, Scalar(0));
+        Mat gray_frame(frame.rows, frame.cols, CV_8UC1);
+        Mat sobel_frame(frame.rows, frame.cols, CV_8UC1, Scalar(0));
 
         matFrames mfs[NTHREADS];
         for (int q = 0; q < NTHREADS; ++q) {
@@ -98,8 +93,8 @@ int main(int argc, char** argv)
 		if(count>=10){
 			stop_time=PAPI_get_real_usec();
 			count=0;
-			fps = 10/((stop_time-start_time)*pow(10,-6));
-			print(fps);
+			fps = 10.0/((stop_time-start_time)*pow(10,-6));
+			printf("%.2f",fps);
 		}
     }
 
