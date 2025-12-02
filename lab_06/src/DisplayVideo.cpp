@@ -10,9 +10,6 @@
 using namespace cv;
 using namespace std::chrono;
 
-void sobelTask(const Task& t);
-void* worker(void* arg);
-
 struct Task {
     Mat* src;
     Mat* dst;
@@ -21,6 +18,9 @@ struct Task {
     bool run_gray;
     bool run_sobel;
 };
+
+void sobelTask(const Task& t);
+void* worker(void* arg);
 
 Task tasks[NTHREADS];
 pthread_t workers[NTHREADS];
