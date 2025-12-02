@@ -51,9 +51,9 @@ int main(int argc, char** argv)
     Mat frame;
 
     while (true) {
-		if(count==0){
-				start_time= PAPI_get_real_usec();
-		}	
+	if(count==0){
+			start_time= PAPI_get_real_usec();
+	}	
         ret = cap.read(frame);
         if (!ret) {
             printf("Last frame reached or error.\n");
@@ -85,17 +85,32 @@ int main(int argc, char** argv)
             pthread_join(thread_id[q], NULL);
         }
 
-        imshow("Sobel Frame", sobel_frame);
+	count++;
+	if(count>=10){
+		stop_time=PAPI_get_real_usec();
+		count=0;
+		fps = 10.0/((stop_time-start_time)*pow(10,-6));
+		printf("%.2f",fps);
+	}
 
-        c = (char)waitKey(25);
+	// ---- DRAW FPS ON FRAME ----
+    char text[50];
+    snprintf(text, sizeof(text), "FPS: %.2f", fps);
+
+    cv::putText(
+        sobel_frame,              // image
+        text,                     // text
+        cv::Point(10, 30),        // bottom-left corner
+        cv::FONT_HERSHEY_SIMPLEX, // font
+        0.8,                      // scale
+        cv::Scalar(255),          // color (white for grayscale)
+        2                         // thickness
+    );
+        
+    imshow("Sobel Frame", sobel_frame);
+    
+    c = (char)waitKey(25);
         if (c == 'q') break;
-
-		if(count>=10){
-			stop_time=PAPI_get_real_usec();
-			count=0;
-			fps = 10.0/((stop_time-start_time)*pow(10,-6));
-			printf("%.2f",fps);
-		}
     }
 
     cap.release();
