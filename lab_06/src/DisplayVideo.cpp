@@ -280,7 +280,7 @@ void* worker(void* arg) {
 
         if (t.run_sobel) {
             // (use your existing optimized Sobel code here)
-            sobelTask(&t);
+            sobelTask(t);
         }
     }
 
