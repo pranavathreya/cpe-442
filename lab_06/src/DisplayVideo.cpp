@@ -194,44 +194,119 @@ int main(int argc, char** argv)
 //		}
 //	return nullptr;
 //}
+//
+//void* sobelThread(const Task& t) {
+//    Mat* gray  = t.src;   // CV_8UC1 input
+//    Mat* sobel = t.dst;   // CV_8UC1 output
+//    int quarter = mf->quarter; // 1..4
+//
+//    CV_Assert(gray && sobel);
+//    CV_Assert(gray->type() == CV_8UC1);
+//    CV_Assert(sobel->type() == CV_8UC1);
+//    CV_Assert(gray->size() == sobel->size());
+//
+//    const int rows = gray->rows;
+//    const int cols = gray->cols;
+//
+//    int start_row = (quarter - 1) * rows / 4;
+//    int end_row   = (quarter)     * rows / 4;
+//
+//    // avoid touching the first/last row (Sobel needs i-1 and i+1)
+//    start_row = std::max(1, start_row);
+//    end_row   = std::min(rows - 1, end_row);
+//	const uint8_t* prevRow; 
+//	const uint8_t* currRow; 
+//	const uint8_t* nextRow; 
+//	uint8_t* outRow;        
+//    for (int i = start_row; i < end_row; ++i) {
+//        prevRow = gray->ptr<uint8_t>(i - 1);
+//        currRow = gray->ptr<uint8_t>(i);
+//        nextRow = gray->ptr<uint8_t>(i + 1);
+//        outRow        = sobel->ptr<uint8_t>(i);
+//
+//        // Vectorized inner loop:
+//        // j runs from 1..cols-2; for 8-wide blocks that read j-1..j+1,
+//        // the last valid vector start index is cols-9.
+//        int j = 1;
+//        const int j_vec_end = (cols >= 9) ? (cols - 9) : 1; // inclusive end for vector starts
+//        for (; j <= j_vec_end; j += 8) {
+//            // Load 8 values for left/center/right from prev, curr, next rows
+//            uint8x8_t pL = vld1_u8(prevRow + (j - 1));
+//            uint8x8_t pC = vld1_u8(prevRow + (j    ));
+//            uint8x8_t pR = vld1_u8(prevRow + (j + 1));
+//
+//            uint8x8_t cL = vld1_u8(currRow + (j - 1));
+//            uint8x8_t cR = vld1_u8(currRow + (j + 1));
+//
+//            uint8x8_t nL = vld1_u8(nextRow + (j - 1));
+//            uint8x8_t nC = vld1_u8(nextRow + (j    ));
+//            uint8x8_t nR = vld1_u8(nextRow + (j + 1));
+//
+//            // Widen to 16-bit signed
+//            int16x8_t pL16 = vreinterpretq_s16_u16(vmovl_u8(pL));
+//            int16x8_t pC16 = vreinterpretq_s16_u16(vmovl_u8(pC));
+//            int16x8_t pR16 = vreinterpretq_s16_u16(vmovl_u8(pR));
+//
+//            int16x8_t cL16 = vreinterpretq_s16_u16(vmovl_u8(cL));
+//            int16x8_t cR16 = vreinterpretq_s16_u16(vmovl_u8(cR));
+//
+//            int16x8_t nL16 = vreinterpretq_s16_u16(vmovl_u8(nL));
+//            int16x8_t nC16 = vreinterpretq_s16_u16(vmovl_u8(nC));
+//            int16x8_t nR16 = vreinterpretq_s16_u16(vmovl_u8(nR));
+//
+//            // gx = (pR - pL) + 2*(cR - cL) + (nR - nL)
+//            int16x8_t gx = vsubq_s16(pR16, pL16);
+//            int16x8_t cdiff = vsubq_s16(cR16, cL16);
+//            gx = vaddq_s16(gx, vshlq_n_s16(cdiff, 1)); // *2
+//            gx = vaddq_s16(gx, vsubq_s16(nR16, nL16));
+//
+//            // gy = -(pL + 2*pC + pR) + (nL + 2*nC + nR)
+//            int16x8_t top = vaddq_s16(pL16, pR16);
+//            top = vaddq_s16(top, vshlq_n_s16(pC16, 1)); // +2*pC
+//            int16x8_t bot = vaddq_s16(nL16, nR16);
+//            bot = vaddq_s16(bot, vshlq_n_s16(nC16, 1)); // +2*nC
+//            int16x8_t gy = vsubq_s16(bot, top);
+//
+//            // |gx| + |gy| with saturation to 8-bit
+//            int16x8_t agx = vabsq_s16(gx);
+//            int16x8_t agy = vabsq_s16(gy);
+//            int16x8_t mag16 = vqaddq_s16(agx, agy);              // saturate to 16-bit
+//            uint8x8_t mag8  = vqmovn_u16(vreinterpretq_u16_s16(mag16)); // narrow to 8-bit
+//
+//            vst1_u8(outRow + j, mag8);
+//        }
+//    }
+//    return nullptr;
+//}
 
-void* sobelThread(void* args) {
-    matFrames* mf = static_cast<matFrames*>(args);
-    Mat* gray  = mf->src;   // CV_8UC1 input
-    Mat* sobel = mf->dst;   // CV_8UC1 output
-    int quarter = mf->quarter; // 1..4
-
-    CV_Assert(gray && sobel);
-    CV_Assert(gray->type() == CV_8UC1);
-    CV_Assert(sobel->type() == CV_8UC1);
-    CV_Assert(gray->size() == sobel->size());
+void sobelTask(const Task& t)
+{
+    Mat* gray  = t.src;
+    Mat* sobel = t.dst;
 
     const int rows = gray->rows;
     const int cols = gray->cols;
 
-    int start_row = (quarter - 1) * rows / 4;
-    int end_row   = (quarter)     * rows / 4;
+    // Clamp boundaries — avoid first/last row (Sobel needs neighbors)
+    int start_row = std::max(1, t.start_row);
+    int end_row   = std::min(rows - 1, t.end_row);
 
-    // avoid touching the first/last row (Sobel needs i-1 and i+1)
-    start_row = std::max(1, start_row);
-    end_row   = std::min(rows - 1, end_row);
-	const uint8_t* prevRow; 
-	const uint8_t* currRow; 
-	const uint8_t* nextRow; 
-	uint8_t* outRow;        
-    for (int i = start_row; i < end_row; ++i) {
-        prevRow = gray->ptr<uint8_t>(i - 1);
-        currRow = gray->ptr<uint8_t>(i);
-        nextRow = gray->ptr<uint8_t>(i + 1);
-        outRow        = sobel->ptr<uint8_t>(i);
+    for (int i = start_row; i < end_row; i++)
+    {
+        const uint8_t* prevRow = gray->ptr<uint8_t>(i - 1);
+        const uint8_t* currRow = gray->ptr<uint8_t>(i);
+        const uint8_t* nextRow = gray->ptr<uint8_t>(i + 1);
 
-        // Vectorized inner loop:
-        // j runs from 1..cols-2; for 8-wide blocks that read j-1..j+1,
-        // the last valid vector start index is cols-9.
+        uint8_t* outRow = sobel->ptr<uint8_t>(i);
+
+        // Vectorizable inner loop:
+        // j runs from 1..cols-2; the last valid NEON start is (cols - 9)
         int j = 1;
-        const int j_vec_end = (cols >= 9) ? (cols - 9) : 1; // inclusive end for vector starts
-        for (; j <= j_vec_end; j += 8) {
-            // Load 8 values for left/center/right from prev, curr, next rows
+        const int j_vec_end = (cols >= 9) ? (cols - 9) : 1;
+
+        for (; j <= j_vec_end; j += 8)
+        {
+            // Load 8-byte chunks from each necessary neighbor
             uint8x8_t pL = vld1_u8(prevRow + (j - 1));
             uint8x8_t pC = vld1_u8(prevRow + (j    ));
             uint8x8_t pR = vld1_u8(prevRow + (j + 1));
@@ -243,7 +318,7 @@ void* sobelThread(void* args) {
             uint8x8_t nC = vld1_u8(nextRow + (j    ));
             uint8x8_t nR = vld1_u8(nextRow + (j + 1));
 
-            // Widen to 16-bit signed
+            // Extend to signed 16-bit
             int16x8_t pL16 = vreinterpretq_s16_u16(vmovl_u8(pL));
             int16x8_t pC16 = vreinterpretq_s16_u16(vmovl_u8(pC));
             int16x8_t pR16 = vreinterpretq_s16_u16(vmovl_u8(pR));
@@ -255,29 +330,46 @@ void* sobelThread(void* args) {
             int16x8_t nC16 = vreinterpretq_s16_u16(vmovl_u8(nC));
             int16x8_t nR16 = vreinterpretq_s16_u16(vmovl_u8(nR));
 
-            // gx = (pR - pL) + 2*(cR - cL) + (nR - nL)
+            //
+            //  gx = (pR - pL) + 2*(cR - cL) + (nR - nL)
+            //
             int16x8_t gx = vsubq_s16(pR16, pL16);
             int16x8_t cdiff = vsubq_s16(cR16, cL16);
-            gx = vaddq_s16(gx, vshlq_n_s16(cdiff, 1)); // *2
+            gx = vaddq_s16(gx, vshlq_n_s16(cdiff, 1));  // *2
             gx = vaddq_s16(gx, vsubq_s16(nR16, nL16));
 
-            // gy = -(pL + 2*pC + pR) + (nL + 2*nC + nR)
+            //
+            //  gy = (nL + 2*nC + nR) − (pL + 2*pC + pR)
+            //
             int16x8_t top = vaddq_s16(pL16, pR16);
-            top = vaddq_s16(top, vshlq_n_s16(pC16, 1)); // +2*pC
+            top = vaddq_s16(top, vshlq_n_s16(pC16, 1));
+
             int16x8_t bot = vaddq_s16(nL16, nR16);
-            bot = vaddq_s16(bot, vshlq_n_s16(nC16, 1)); // +2*nC
+            bot = vaddq_s16(bot, vshlq_n_s16(nC16, 1));
+
             int16x8_t gy = vsubq_s16(bot, top);
 
-            // |gx| + |gy| with saturation to 8-bit
-            int16x8_t agx = vabsq_s16(gx);
-            int16x8_t agy = vabsq_s16(gy);
-            int16x8_t mag16 = vqaddq_s16(agx, agy);              // saturate to 16-bit
-            uint8x8_t mag8  = vqmovn_u16(vreinterpretq_u16_s16(mag16)); // narrow to 8-bit
+            // |gx| + |gy| → saturated 8-bit
+            int16x8_t mag16 = vqaddq_s16(vabsq_s16(gx), vabsq_s16(gy));
+            uint8x8_t mag8  = vqmovn_u16(vreinterpretq_u16_s16(mag16));
 
             vst1_u8(outRow + j, mag8);
         }
+
+        // Handle scalar tail pixels (leftovers)
+        for (; j < cols - 1; j++)
+        {
+            int gx =  (currRow[j+1] - currRow[j-1]) * 2
+                    + (prevRow[j+1] - prevRow[j-1])
+                    + (nextRow[j+1] - nextRow[j-1]);
+
+            int gy =  (nextRow[j-1] + 2*nextRow[j] + nextRow[j+1])
+                    - (prevRow[j-1] + 2*prevRow[j] + prevRow[j+1]);
+
+            int mag = std::min(255, abs(gx) + abs(gy));
+            outRow[j] = (uint8_t)mag;
+        }
     }
-    return nullptr;
 }
 
 void* worker(void* arg) {
