@@ -13,18 +13,30 @@ using namespace std::chrono;
 void* grayScale(void *args);
 void* sobelThread(void *args);
 
-struct matFrames {
-    Mat* src;   // for grayscale: BGR frame; for sobel: gray frame
-    Mat* dst;   // for grayscale: gray frame; for sobel: sobel output
-    int quarter; // 1..4 (row-wise partition)
+struct Task {
+    Mat* src;
+    Mat* dst;
+    int start_row;
+    int end_row;
+    bool run_gray;
+    bool run_sobel;
 };
+
+Task tasks[NTHREADS];
+pthread_t workers[NTHREADS];
+pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+bool work_ready = false;
+bool stop_all = false;
 
 int main(int argc, char** argv)
 {
 	int count=0;
-	int start_time=0;
-	int stop_time=0;
+	long long start_time=0;
+	long long stop_time=0;
 	float fps=0;
+	int height=1080;
+	int width=1920;
 
 	char c; 
 	bool ret;
@@ -50,6 +62,14 @@ int main(int argc, char** argv)
 
     Mat frame;
 
+	// Create threads
+	for (int i = 0; i < NTHREADS; i++)
+			pthread_create(&workers[i], NULL, worker, (void*)(intptr_t)i);
+
+		
+	int step = height / NTHREADS;
+	Mat gray_frame(height, width, CV_8UC1);
+    Mat sobel_frame(height, width, CV_8UC1);
     while (true) {
 	if(count==0){
 			start_time= PAPI_get_real_usec();
@@ -59,10 +79,23 @@ int main(int argc, char** argv)
             printf("Last frame reached or error.\n");
             break;
         }
-        
-        Mat gray_frame(frame.rows, frame.cols, CV_8UC1);
-        Mat sobel_frame(frame.rows, frame.cols, CV_8UC1, Scalar(0));
 
+		for (int i = 0; i < NTHREADS; i++) {
+			tasks[i].src = &frame;
+			tasks[i].dst = &gray_frame;
+			tasks[i].start_row = i * step;
+			tasks[i].end_row = (i == NTHREADS-1) ? rows : (i+1)*step;
+			tasks[i].run_gray = true;
+			tasks[i].run_sobel = false;
+		}
+
+		pthread_mutex_lock(&mtx);
+		work_ready = true;
+		pthread_cond_broadcast(&cond);
+		pthread_mutex_unlock(&mtx);
+			
+		
+		/*
         matFrames mfs[NTHREADS];
         for (int q = 0; q < NTHREADS; ++q) {
             mfs[q].src = &frame;
@@ -83,17 +116,24 @@ int main(int argc, char** argv)
         }
         for (int q = 0; q < NTHREADS; ++q) {
             pthread_join(thread_id[q], NULL);
-        }
+		}
+		*/
+		for (int i=0; i<NTHREADS; i++) {
+			tasks[i].src = &gray_frame;
+			tasks[i].dst = &sobel_frame;
+			tasks[i].run_gray = false;
+			tasks[i].run_sobel = true;
+		}
 
-	count++;
-	if(count>=10){
-		stop_time=PAPI_get_real_usec();
-		count=0;
-		fps = 10.0/((stop_time-start_time)*pow(10,-6));
-		printf("%.2f",fps);
-	}
+	    count++;
+        if (count >= 10) {
+        stop_time = PAPI_get_real_usec();
+        fps = 10.0 / ((stop_time - start_time) * pow(10, -6));
+        start_time = stop_time;   // reset for next batch
+        count = 0;
+    }
 
-	// ---- DRAW FPS ON FRAME ----
+    // ---- DRAW FPS ON FRAME ----
     char text[50];
     snprintf(text, sizeof(text), "FPS: %.2f", fps);
 
@@ -106,11 +146,11 @@ int main(int argc, char** argv)
         cv::Scalar(255),          // color (white for grayscale)
         2                         // thickness
     );
-        
+
     imshow("Sobel Frame", sobel_frame);
-    
-    c = (char)waitKey(25);
-        if (c == 'q') break;
+
+    char c = (char)waitKey(25);
+    if (c == 'q') break;
     }
 
     cap.release();
@@ -236,6 +276,45 @@ void* sobelThread(void* args) {
             vst1_u8(outRow + j, mag8);
         }
     }
+    return nullptr;
+}
+
+void* worker(void* arg) {
+    int id = (intptr_t)arg;
+
+    while (true) {
+        pthread_mutex_lock(&mtx);
+        while (!work_ready)
+            pthread_cond_wait(&cond, &mtx);
+
+        if (stop_all) {
+            pthread_mutex_unlock(&mtx);
+            break;
+        }
+
+        Task& t = tasks[id];
+        pthread_mutex_unlock(&mtx);
+
+        if (t.run_gray) {
+            for (int r = t.start_row; r < t.end_row; r++) {
+                uint8_t* src = t.src->ptr<uint8_t>(r);
+                uint8_t* dst = t.dst->ptr<uint8_t>(r);
+                for (int c = 0; c < t.src->cols; c+=8) {
+                    uint8x8x3_t pix = vld3_u8(src + c*3);
+                    uint16x8_t temp = vmull_u8(pix.val[0], vdup_n_u8(29));
+                    temp = vmlal_u8(temp, pix.val[1], vdup_n_u8(150));
+                    temp = vmlal_u8(temp, pix.val[2], vdup_n_u8(77));
+                    vst1_u8(dst + c, vshrn_n_u16(temp, 8));
+                }
+            }
+        }
+
+        if (t.run_sobel) {
+            // (use your existing optimized Sobel code here)
+            sobelThread(&t);
+        }
+    }
+
     return nullptr;
 }
 
