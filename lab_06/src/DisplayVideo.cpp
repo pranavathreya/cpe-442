@@ -12,6 +12,7 @@ using namespace std::chrono;
 
 void* grayScale(void *args);
 void* sobelThread(void *args);
+void* worker(void* arg);
 
 struct Task {
     Mat* src;
