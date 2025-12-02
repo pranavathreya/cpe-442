@@ -159,41 +159,41 @@ int main(int argc, char** argv)
     return 0;
 }
 
-void* grayScale(void* args){
-    matFrames* mf = static_cast<matFrames*>(args);
-    Mat* frame = mf->src;      // BGR input
-    Mat* gray = mf->dst; // grayscale output
-    int quarter = mf->quarter; // 1..4
-
-    const int N = gray->rows;
-    const int rows = gray->rows;
-    const int cols = gray->cols;
-	const int num_pixels= rows*cols;
-    const int start_row = (quarter - 1) * N / 4;
-    const int end_pixel = num_pixels/4;
-
-    uint8x8x3_t src;
-	uint8x8_t       w_r = vdup_n_u8(77);
-	uint8x8_t       w_g = vdup_n_u8(150);
-	uint8x8_t       w_b = vdup_n_u8(29);
-	uint16x8_t      temp;
-	uint8x8_t       result;
-		uint8_t* currRow = frame->ptr<uint8_t>(start_row);
-		uint8_t* currGrayRow = gray->ptr<uint8_t>(start_row);
-		for (int j = 0; j < end_pixel; j+=8, currRow += 8 * 3, currGrayRow += 8) {
-				src = vld3_u8(currRow);
-
-				temp = vmull_u8(src.val[0], w_b);
-
-				temp = vmlal_u8(temp, src.val[1], w_g);
-				temp = vmlal_u8(temp, src.val[2], w_r);
-
-				result = vshrn_n_u16(temp, 8);
-
-				vst1_u8(currGrayRow, result);
-		}
-	return nullptr;
-}
+//void* grayScale(void* args){
+//    matFrames* mf = static_cast<matFrames*>(args);
+//    Mat* frame = mf->src;      // BGR input
+//    Mat* gray = mf->dst; // grayscale output
+//    int quarter = mf->quarter; // 1..4
+//
+//    const int N = gray->rows;
+//    const int rows = gray->rows;
+//    const int cols = gray->cols;
+//	const int num_pixels= rows*cols;
+//    const int start_row = (quarter - 1) * N / 4;
+//    const int end_pixel = num_pixels/4;
+//
+//    uint8x8x3_t src;
+//	uint8x8_t       w_r = vdup_n_u8(77);
+//	uint8x8_t       w_g = vdup_n_u8(150);
+//	uint8x8_t       w_b = vdup_n_u8(29);
+//	uint16x8_t      temp;
+//	uint8x8_t       result;
+//		uint8_t* currRow = frame->ptr<uint8_t>(start_row);
+//		uint8_t* currGrayRow = gray->ptr<uint8_t>(start_row);
+//		for (int j = 0; j < end_pixel; j+=8, currRow += 8 * 3, currGrayRow += 8) {
+//				src = vld3_u8(currRow);
+//
+//				temp = vmull_u8(src.val[0], w_b);
+//
+//				temp = vmlal_u8(temp, src.val[1], w_g);
+//				temp = vmlal_u8(temp, src.val[2], w_r);
+//
+//				result = vshrn_n_u16(temp, 8);
+//
+//				vst1_u8(currGrayRow, result);
+//		}
+//	return nullptr;
+//}
 
 void* sobelThread(void* args) {
     matFrames* mf = static_cast<matFrames*>(args);
