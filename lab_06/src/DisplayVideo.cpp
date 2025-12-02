@@ -85,7 +85,7 @@ int main(int argc, char** argv)
 			tasks[i].src = &frame;
 			tasks[i].dst = &gray_frame;
 			tasks[i].start_row = i * step;
-			tasks[i].end_row = (i == NTHREADS-1) ? rows : (i+1)*step;
+			tasks[i].end_row = (i == NTHREADS-1) ? height : (i+1)*step;
 			tasks[i].run_gray = true;
 			tasks[i].run_sobel = false;
 		}
