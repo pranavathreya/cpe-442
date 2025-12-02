@@ -1,297 +1,364 @@
-// =======================
-// DisplayVideo.cpp (Optimized)
-// =======================
-// Real-time multithreaded NEON grayscale + Sobel with thread pool.
-// Uses row partitioning and zero dynamic allocations in loop.
-// PAPI timing + FPS overlay.
-//
-// Reference to original user file: :contentReference[oaicite:1]{index=1}
-// =======================
-
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
 #include <arm_neon.h>
-#include <papi.h>
 #include <atomic>
 #include <chrono>
-
-#define NTHREADS 4
+#include <iostream>
 
 using namespace cv;
+using namespace std;
 
-// =====================================================================
-// Thread-pool shared structures
-// =====================================================================
-struct Task {
-    Mat* src;
-    Mat* dst;
-    int start_row;
-    int end_row;
-    bool do_gray;
-    bool do_sobel;
+static const int NUM_THREADS = 4;
+
+// ----------------------------------------------------------
+// Job description for each worker
+// ----------------------------------------------------------
+enum class JobType {
+    None,
+    Grayscale,
+    Sobel,
+    Exit
 };
 
-Task tasks[NTHREADS];
-pthread_t workers[NTHREADS];
-pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+struct Job {
+    Mat* input;
+    Mat* output;
+    int rowStart;
+    int rowEnd;
+    JobType type;
+};
 
-bool work_ready = false;
-bool stop_all = false;
-std::atomic<int> finished_threads(0);
+// ----------------------------------------------------------
+// Shared state for thread pool
+// ----------------------------------------------------------
+static Job       g_jobs[NUM_THREADS];
+static pthread_t g_threads[NUM_THREADS];
 
-// =====================================================================
-// HIGH-PERFORMANCE GRAYSCALE (NEON)
-// =====================================================================
-inline void grayscale_neon(Mat& src, Mat& dst, int r0, int r1)
+static pthread_mutex_t g_jobMutex  = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_jobCond   = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t  g_doneCond  = PTHREAD_COND_INITIALIZER;
+
+static std::atomic<int> g_jobsRemaining(0);
+static bool g_newWorkAvailable = false;
+static bool g_shutdownRequested = false;
+
+// ----------------------------------------------------------
+// NEON Grayscale: BGR (8UC3) -> Gray (8UC1)
+// Each thread handles rows [rowStart, rowEnd)
+// ----------------------------------------------------------
+static void grayscale_neon(Mat& src, Mat& dst, int rowStart, int rowEnd)
 {
-    for (int r = r0; r < r1; r++)
-    {
-        uint8_t* in  = src.ptr<uint8_t>(r);
-        uint8_t* out = dst.ptr<uint8_t>(r);
+    const int width = src.cols;
 
-        int c = 0;
-        int limit = src.cols - 8;
+    for (int y = rowStart; y < rowEnd; ++y) {
+        const uint8_t* srcRow = src.ptr<uint8_t>(y);
+        uint8_t*       dstRow = dst.ptr<uint8_t>(y);
 
-        for (; c <= limit; c += 8)
-        {
-            uint8x8x3_t pix = vld3_u8(in + 3*c);
+        int x = 0;
+        // Process 8 pixels at a time
+        for (; x <= width - 8; x += 8) {
+            // Load 8 pixels (interleaved BGR)
+            uint8x8x3_t bgr = vld3_u8(srcRow + 3 * x);
 
-            uint16x8_t t = vmull_u8(pix.val[0], vdup_n_u8(29));
-            t = vmlal_u8(t, pix.val[1], vdup_n_u8(150));
-            t = vmlal_u8(t, pix.val[2], vdup_n_u8(77));
+            // Convert to wider type
+            uint16x8_t b16 = vmovl_u8(bgr.val[0]);
+            uint16x8_t g16 = vmovl_u8(bgr.val[1]);
+            uint16x8_t r16 = vmovl_u8(bgr.val[2]);
 
-            vst1_u8(out + c, vshrn_n_u16(t, 8));
+            // Weighted sum: Y ≈ 0.114 B + 0.587 G + 0.299 R
+            // Using integer weights scaled by 256: 29, 150, 77
+            uint16x8_t y16 = vmulq_n_u16(b16, 29);
+            y16 = vmlaq_n_u16(y16, g16, 150);
+            y16 = vmlaq_n_u16(y16, r16, 77);
+
+            // Downscale back to 8-bit
+            uint8x8_t y8 = vshrn_n_u16(y16, 8);
+            vst1_u8(dstRow + x, y8);
         }
 
-        for (; c < src.cols; c++)
-        {
-            Vec3b& p = *(Vec3b*)(in + 3*c);
-            out[c] = (p[0] * 29 + p[1] * 150 + p[2] * 77) >> 8;
+        // Scalar tail for leftover pixels
+        for (; x < width; ++x) {
+            const uint8_t* p = srcRow + 3 * x;
+            int b = p[0];
+            int g = p[1];
+            int r = p[2];
+            int y = (29 * b + 150 * g + 77 * r) >> 8;
+            dstRow[x] = static_cast<uint8_t>(y);
         }
     }
 }
 
-// =====================================================================
-// HIGH-PERFORMANCE SOBEL (NEON)
-// =====================================================================
-inline void sobel_neon(Mat& src, Mat& dst, int r0, int r1)
+// ----------------------------------------------------------
+// NEON Sobel on grayscale 8UC1 -> 8UC1
+// Each thread handles rows [rowStart, rowEnd)
+// Border rows are handled by clamping to [1, rows-2]
+// ----------------------------------------------------------
+static void sobel_neon(Mat& src, Mat& dst, int rowStart, int rowEnd)
 {
-    int rows = src.rows;
-    int cols = src.cols;
+    const int rows = src.rows;
+    const int cols = src.cols;
 
-    r0 = std::max(1, r0);
-    r1 = std::min(rows - 1, r1);
+    // Avoid top/bottom border (need y-1 and y+1)
+    int y0 = max(rowStart, 1);
+    int y1 = min(rowEnd, rows - 1);
 
-    for (int r = r0; r < r1; r++)
-    {
-        const uint8_t* prev = src.ptr<uint8_t>(r - 1);
-        const uint8_t* curr = src.ptr<uint8_t>(r);
-        const uint8_t* next = src.ptr<uint8_t>(r + 1);
-        uint8_t* out = dst.ptr<uint8_t>(r);
+    for (int y = y0; y < y1; ++y) {
+        const uint8_t* rowAbove = src.ptr<uint8_t>(y - 1);
+        const uint8_t* rowCurr  = src.ptr<uint8_t>(y);
+        const uint8_t* rowBelow = src.ptr<uint8_t>(y + 1);
+        uint8_t* outRow         = dst.ptr<uint8_t>(y);
 
-        int c = 1;
-        int limit = cols - 9;
+        int x = 1;                     // avoid left border
+        int vecLimit = cols - 8 - 1;   // keep margin for x+7, x+1, x-1
 
-        for (; c <= limit; c += 8)
-        {
-            uint8x8_t pL = vld1_u8(prev + (c - 1));
-            uint8x8_t pC = vld1_u8(prev + c);
-            uint8x8_t pR = vld1_u8(prev + (c + 1));
+        // Vectorized part
+        for (; x <= vecLimit; x += 8) {
+            // Load left/center/right neighborhoods above, center, below
+            uint8x8_t aL = vld1_u8(rowAbove + x - 1);
+            uint8x8_t aC = vld1_u8(rowAbove + x);
+            uint8x8_t aR = vld1_u8(rowAbove + x + 1);
 
-            uint8x8_t cL = vld1_u8(curr + (c - 1));
-            uint8x8_t cR = vld1_u8(curr + (c + 1));
+            uint8x8_t cL = vld1_u8(rowCurr + x - 1);
+            uint8x8_t cC = vld1_u8(rowCurr + x);
+            uint8x8_t cR = vld1_u8(rowCurr + x + 1);
 
-            uint8x8_t nL = vld1_u8(next + (c - 1));
-            uint8x8_t nC = vld1_u8(next + c);
-            uint8x8_t nR = vld1_u8(next + (c + 1));
+            uint8x8_t bL = vld1_u8(rowBelow + x - 1);
+            uint8x8_t bC = vld1_u8(rowBelow + x);
+            uint8x8_t bR = vld1_u8(rowBelow + x + 1);
 
-            int16x8_t pL16 = vreinterpretq_s16_u16(vmovl_u8(pL));
-            int16x8_t pC16 = vreinterpretq_s16_u16(vmovl_u8(pC));
-            int16x8_t pR16 = vreinterpretq_s16_u16(vmovl_u8(pR));
+            // Widen to signed 16-bit
+            int16x8_t aL16 = vreinterpretq_s16_u16(vmovl_u8(aL));
+            int16x8_t aC16 = vreinterpretq_s16_u16(vmovl_u8(aC));
+            int16x8_t aR16 = vreinterpretq_s16_u16(vmovl_u8(aR));
 
             int16x8_t cL16 = vreinterpretq_s16_u16(vmovl_u8(cL));
+            int16x8_t cC16 = vreinterpretq_s16_u16(vmovl_u8(cC));
             int16x8_t cR16 = vreinterpretq_s16_u16(vmovl_u8(cR));
 
-            int16x8_t nL16 = vreinterpretq_s16_u16(vmovl_u8(nL));
-            int16x8_t nC16 = vreinterpretq_s16_u16(vmovl_u8(nC));
-            int16x8_t nR16 = vreinterpretq_s16_u16(vmovl_u8(nR));
+            int16x8_t bL16 = vreinterpretq_s16_u16(vmovl_u8(bL));
+            int16x8_t bC16 = vreinterpretq_s16_u16(vmovl_u8(bC));
+            int16x8_t bR16 = vreinterpretq_s16_u16(vmovl_u8(bR));
 
-            int16x8_t gx = vsubq_s16(pR16, pL16);
-            gx = vaddq_s16(gx, vshlq_n_s16(vsubq_s16(cR16, cL16), 1));
-            gx = vaddq_s16(gx, vsubq_s16(nR16, nL16));
+            // Sobel Gx:
+            //   gx = (aR + 2*cR + bR) - (aL + 2*cL + bL)
+            int16x8_t leftCol  = vaddq_s16(aL16, bL16);
+            leftCol            = vaddq_s16(leftCol, vshlq_n_s16(cL16, 1));
+            int16x8_t rightCol = vaddq_s16(aR16, bR16);
+            rightCol           = vaddq_s16(rightCol, vshlq_n_s16(cR16, 1));
+            int16x8_t gx       = vsubq_s16(rightCol, leftCol);
 
-            int16x8_t top = vaddq_s16(pL16, pR16);
-            top = vaddq_s16(top, vshlq_n_s16(pC16, 1));
-            int16x8_t bot = vaddq_s16(nL16, nR16);
-            bot = vaddq_s16(bot, vshlq_n_s16(nC16, 1));
+            // Sobel Gy:
+            //   gy = (bL + 2*bC + bR) - (aL + 2*aC + aR)
+            int16x8_t topRow    = vaddq_s16(aL16, aR16);
+            topRow              = vaddq_s16(topRow, vshlq_n_s16(aC16, 1));
+            int16x8_t bottomRow = vaddq_s16(bL16, bR16);
+            bottomRow           = vaddq_s16(bottomRow, vshlq_n_s16(bC16, 1));
+            int16x8_t gy        = vsubq_s16(bottomRow, topRow);
 
-            int16x8_t gy = vsubq_s16(bot, top);
-
+            // |gx| + |gy| with saturation
             int16x8_t agx = vabsq_s16(gx);
             int16x8_t agy = vabsq_s16(gy);
             int16x8_t mag = vqaddq_s16(agx, agy);
 
             uint8x8_t mag8 = vqmovn_u16(vreinterpretq_u16_s16(mag));
-
-            vst1_u8(out + c, mag8);
+            vst1_u8(outRow + x, mag8);
         }
 
-        for (; c < cols - 1; c++)
-        {
-            int gx = 
-                (curr[c+1] - curr[c-1]) * 2 +
-                (prev[c+1] - prev[c-1]) +
-                (next[c+1] - next[c-1]);
+        // Scalar tail for remaining columns (up to cols-2)
+        for (; x < cols - 1; ++x) {
+            int aL = rowAbove[x - 1];
+            int aC = rowAbove[x];
+            int aR = rowAbove[x + 1];
 
-            int gy =
-                (next[c-1] + 2*next[c] + next[c+1]) -
-                (prev[c-1] + 2*prev[c] + prev[c+1]);
+            int cL = rowCurr[x - 1];
+            int cC = rowCurr[x];
+            int cR = rowCurr[x + 1];
 
-            int m = std::min(255, abs(gx) + abs(gy));
-            out[c] = m;
+            int bL = rowBelow[x - 1];
+            int bC = rowBelow[x];
+            int bR = rowBelow[x + 1];
+
+            int gx = (aR + 2 * cR + bR) - (aL + 2 * cL + bL);
+            int gy = (bL + 2 * bC + bR) - (aL + 2 * aC + aR);
+
+            int mag = std::abs(gx) + std::abs(gy);
+            if (mag > 255) mag = 255;
+            outRow[x] = static_cast<uint8_t>(mag);
         }
+
+        // We leave borders (x=0 and x=cols-1) untouched or zero
+        outRow[0] = 0;
+        outRow[cols - 1] = 0;
     }
 }
 
-// =====================================================================
-// Worker thread (persistent)
-// =====================================================================
-void* worker(void* arg)
+// ----------------------------------------------------------
+// Worker thread function
+// ----------------------------------------------------------
+static void* worker_main(void* arg)
 {
-    int id = (intptr_t)arg;
+    int id = reinterpret_cast<intptr_t>(arg);
 
-    while (true)
-    {
-        pthread_mutex_lock(&mtx);
-        while (!work_ready)
-            pthread_cond_wait(&cond, &mtx);
-
-        if (stop_all)
-        {
-            pthread_mutex_unlock(&mtx);
-            return nullptr;
+    while (true) {
+        pthread_mutex_lock(&g_jobMutex);
+        while (!g_newWorkAvailable && !g_shutdownRequested) {
+            pthread_cond_wait(&g_jobCond, &g_jobMutex);
         }
 
-        Task& t = tasks[id];
-        pthread_mutex_unlock(&mtx);
+        if (g_shutdownRequested) {
+            pthread_mutex_unlock(&g_jobMutex);
+            break;
+        }
 
-        if (t.do_gray)
-            grayscale_neon(*t.src, *t.dst, t.start_row, t.end_row);
-        if (t.do_sobel)
-            sobel_neon(*t.src, *t.dst, t.start_row, t.end_row);
+        Job job = g_jobs[id];  // copy task locally
+        pthread_mutex_unlock(&g_jobMutex);
 
-        finished_threads++;
+        if (job.type == JobType::Grayscale) {
+            grayscale_neon(*job.input, *job.output, job.rowStart, job.rowEnd);
+        } else if (job.type == JobType::Sobel) {
+            sobel_neon(*job.input, *job.output, job.rowStart, job.rowEnd);
+        } else if (job.type == JobType::Exit) {
+            break;
+        }
+
+        // Notify completion
+        int remaining = --g_jobsRemaining;
+        if (remaining == 0) {
+            pthread_mutex_lock(&g_jobMutex);
+            g_newWorkAvailable = false;
+            pthread_cond_signal(&g_doneCond);
+            pthread_mutex_unlock(&g_jobMutex);
+        }
     }
+
     return nullptr;
 }
 
-// =====================================================================
-// MAIN
-// =====================================================================
+// ----------------------------------------------------------
+// Helper to dispatch a phase (grayscale or sobel) to all threads
+// ----------------------------------------------------------
+static void run_phase(JobType type, Mat& src, Mat& dst)
+{
+    const int rows = src.rows;
+    int chunk = rows / NUM_THREADS;
+    int rowStart = 0;
+
+    pthread_mutex_lock(&g_jobMutex);
+    g_jobsRemaining = NUM_THREADS;
+    g_newWorkAvailable = true;
+
+    for (int i = 0; i < NUM_THREADS; ++i) {
+        int rowEnd = (i == NUM_THREADS - 1) ? rows : rowStart + chunk;
+        g_jobs[i].input    = &src;
+        g_jobs[i].output   = &dst;
+        g_jobs[i].rowStart = rowStart;
+        g_jobs[i].rowEnd   = rowEnd;
+        g_jobs[i].type     = type;
+        rowStart = rowEnd;
+    }
+
+    pthread_cond_broadcast(&g_jobCond);
+
+    // Wait until all threads finish this phase
+    while (g_jobsRemaining > 0) {
+        pthread_cond_wait(&g_doneCond, &g_jobMutex);
+    }
+    pthread_mutex_unlock(&g_jobMutex);
+}
+
+// ----------------------------------------------------------
+// Main program
+// ----------------------------------------------------------
 int main(int argc, char** argv)
 {
-    if (argc != 2)
-    {
-        printf("usage: DisplayVideo <Video_Path>\n");
-        return -1;
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <video_path>\n";
+        return 1;
     }
 
     VideoCapture cap(argv[1]);
-    if (!cap.isOpened())
-    {
-        printf("Error opening video.\n");
-        return -1;
+    if (!cap.isOpened()) {
+        std::cerr << "Could not open video: " << argv[1] << "\n";
+        return 1;
     }
-    printf("Video opened.\n");
 
-    // Start thread pool
-    for (int i = 0; i < NTHREADS; i++)
-        pthread_create(&workers[i], nullptr, worker, (void*)(intptr_t)i);
+    // Prime first frame to know dimensions
+    Mat firstFrame;
+    if (!cap.read(firstFrame) || firstFrame.empty()) {
+        std::cerr << "Failed to read first frame.\n";
+        return 1;
+    }
 
-    Mat frame;
-    cap.read(frame);
+    int width  = firstFrame.cols;
+    int height = firstFrame.rows;
 
-    int H = frame.rows;
-    int W = frame.cols;
+    // Allocate buffers once
+    Mat frame   = firstFrame.clone();
+    Mat grayImg(height, width, CV_8UC1);
+    Mat sobelImg(height, width, CV_8UC1, Scalar(0));
 
-    Mat gray(H, W, CV_8UC1);
-    Mat sobel(H, W, CV_8UC1);
+    // Start worker threads
+    for (int i = 0; i < NUM_THREADS; ++i) {
+        pthread_create(&g_threads[i], nullptr, worker_main,
+                       reinterpret_cast<void*>(static_cast<intptr_t>(i)));
+    }
 
-    long long start_t = PAPI_get_real_usec();
-    float fps = 0;
-    int counter = 0;
+    using clock_t = chrono::steady_clock;
+    auto t0 = clock_t::now();
+    int frameCount = 0;
+    double fps = 0.0;
 
-    while (true)
-    {
-        if (!cap.read(frame))
-            break;
-
-        int step = H / NTHREADS;
-        finished_threads = 0;
-
-        for (int i = 0; i < NTHREADS; i++)
-        {
-            tasks[i].src = &frame;
-            tasks[i].dst = &gray;
-            tasks[i].start_row = i * step;
-            tasks[i].end_row = (i == NTHREADS - 1 ? H : (i+1)*step);
-            tasks[i].do_gray = true;
-            tasks[i].do_sobel = false;
+    while (true) {
+        // We already have first frame; for next iterations read new ones
+        if (frameCount > 0) {
+            if (!cap.read(frame) || frame.empty()) {
+                std::cout << "End of video or read error.\n";
+                break;
+            }
         }
 
-        pthread_mutex_lock(&mtx);
-        work_ready = true;
-        pthread_cond_broadcast(&cond);
-        pthread_mutex_unlock(&mtx);
+        // Phase 1: Grayscale
+        run_phase(JobType::Grayscale, frame, grayImg);
 
-        while (finished_threads != NTHREADS) {}
+        // Phase 2: Sobel
+        sobelImg.setTo(0);
+        run_phase(JobType::Sobel, grayImg, sobelImg);
 
-        finished_threads = 0;
-
-        for (int i = 0; i < NTHREADS; i++)
-        {
-            tasks[i].src = &gray;
-            tasks[i].dst = &sobel;
-            tasks[i].do_gray = false;
-            tasks[i].do_sobel = true;
+        // FPS measurement
+        frameCount++;
+        if (frameCount >= 30) {
+            auto t1 = clock_t::now();
+            double elapsedSec =
+                chrono::duration_cast<chrono::microseconds>(t1 - t0).count()
+                / 1e6;
+            fps = frameCount / elapsedSec;
+            t0 = t1;
+            frameCount = 0;
         }
 
-        pthread_mutex_lock(&mtx);
-        work_ready = true;
-        pthread_cond_broadcast(&cond);
-        pthread_mutex_unlock(&mtx);
-
-        while (finished_threads != NTHREADS) {}
-
-        counter++;
-        if (counter >= 10)
-        {
-            long long now = PAPI_get_real_usec();
-            fps = 10.0 / ((now - start_t) * 1e-6);
-            start_t = now;
-            counter = 0;
-        }
-
-        char buf[64];
-        snprintf(buf, 64, "FPS: %.2f", fps);
-        putText(sobel, buf, Point(10, 30),
+        // Draw FPS on the Sobel image
+        char text[64];
+        snprintf(text, sizeof(text), "FPS: %.2f", fps);
+        putText(sobelImg, text, Point(10, 30),
                 FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255), 2);
 
-        imshow("Sobel", sobel);
-        if (waitKey(1) == 'q')
+        imshow("Sobel (NEON + pthreads)", sobelImg);
+        char key = static_cast<char>(waitKey(1));
+        if (key == 'q' || key == 27) { // 'q' or ESC
             break;
+        }
     }
 
-    // stop threads
-    pthread_mutex_lock(&mtx);
-    stop_all = true;
-    work_ready = true;
-    pthread_cond_broadcast(&cond);
-    pthread_mutex_unlock(&mtx);
+    // Request shutdown of workers
+    pthread_mutex_lock(&g_jobMutex);
+    g_shutdownRequested = true;
+    g_newWorkAvailable  = true;
+    pthread_cond_broadcast(&g_jobCond);
+    pthread_mutex_unlock(&g_jobMutex);
 
-    for (int i = 0; i < NTHREADS; i++)
-        pthread_join(workers[i], nullptr);
+    for (int i = 0; i < NUM_THREADS; ++i) {
+        pthread_join(g_threads[i], nullptr);
+    }
 
     return 0;
 }
