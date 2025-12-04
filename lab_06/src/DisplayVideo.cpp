@@ -60,7 +60,7 @@ int main(int argc, char** argv)
     long long values[2]; // one per event
     int retval;
 
-    / Create an empty event set
+    // Create an empty event set
     retval = PAPI_create_eventset(&EventSet);
     if (retval != PAPI_OK) {
         fprintf(stderr, "PAPI_create_eventset error: %s\n", PAPI_strerror(retval));
