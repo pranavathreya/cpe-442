@@ -160,21 +160,20 @@ int main(int argc, char** argv)
             }
             start_time = stop_time;
             count = 0;
-	    printf("Frame Rate: %.2f\n", fps);
         }
 
-        //// Draw FPS on sobel_frame
-        //char text[50];
-        //snprintf(text, sizeof(text), "FPS: %.2f", fps);
-        //putText(
-        //    sobel_frame,
-        //    text,
-        //    Point(10, 30),
-        //    FONT_HERSHEY_SIMPLEX,
-        //    0.8,
-        //    Scalar(255),
-        //    2
-        //);
+        // Draw FPS on sobel_frame
+        char text[50];
+        snprintf(text, sizeof(text), "FPS: %.2f", fps);
+        putText(
+            sobel_frame,
+            text,
+            Point(10, 30),
+            FONT_HERSHEY_SIMPLEX,
+            0.8,
+            Scalar(255),
+            2
+        );
 
         imshow("Sobel Frame", sobel_frame);
 
