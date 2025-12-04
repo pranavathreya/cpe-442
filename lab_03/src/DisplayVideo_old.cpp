@@ -1,17 +1,11 @@
 #include <opencv2/opencv.hpp>
 #include <stdio.h>
 #include <stdlib.h>
-#include <papi.h>
 
 using namespace cv;
 
 int main(int argc, char** argv )
 {
-    int   count      = 0;
-    long long start_time = 0;
-    long long stop_time  = 0;
-    float fps       = 0.0f;
-
     if ( argc != 2 )
     {
         printf("usage: DisplayVideo <Video_Path>\n");
@@ -92,30 +86,6 @@ int main(int argc, char** argv )
 			}
 		}
 
-		count++;
-		if (count >= 10) {
-		    stop_time = PAPI_get_real_usec();
-		    long long delta = stop_time - start_time;
-		    if (delta > 0) {
-			// 10 frames per delta microseconds
-			fps = 10.0f * 1e6f / (float)delta;
-		    }
-		    start_time = stop_time;
-		    count = 0;
-		}
-
-		// Draw FPS on sobel_frame
-		char text[50];
-		snprintf(text, sizeof(text), "FPS: %.2f", fps);
-		putText(
-		    sobel_frame,
-		    text,
-		    Point(10, 30),
-		    FONT_HERSHEY_SIMPLEX,
-		    0.8,
-		    Scalar(255),
-		    2
-		);
 		cv::imshow("Sobel Frame", sobel_frame);
 		//cv::waitKey(0);
 
