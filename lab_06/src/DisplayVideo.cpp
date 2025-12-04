@@ -56,6 +56,36 @@ int main(int argc, char** argv)
         return -1;
     }
 
+    int EventSet = PAPI_NULL;
+    long long values[2]; // one per event
+    int retval;
+
+    / Create an empty event set
+    retval = PAPI_create_eventset(&EventSet);
+    if (retval != PAPI_OK) {
+        fprintf(stderr, "PAPI_create_eventset error: %s\n", PAPI_strerror(retval));
+        exit(1);
+    }
+    
+    // Add events (check availability)
+    if (PAPI_query_event(PAPI_L1_DCM) == PAPI_OK) {
+        retval = PAPI_add_event(EventSet, PAPI_L1_DCM);
+        if (retval != PAPI_OK) {
+            fprintf(stderr, "PAPI_add_event(L1_DCM) error: %s\n", PAPI_strerror(retval));
+        }
+    } else {
+        fprintf(stderr, "PAPI_L1_DCM not supported on this system\n");
+    }
+    
+    if (PAPI_query_event(PAPI_L2_DCM) == PAPI_OK) {
+        retval = PAPI_add_event(EventSet, PAPI_L2_DCM);
+        if (retval != PAPI_OK) {
+            fprintf(stderr, "PAPI_add_event(L2_DCM) error: %s\n", PAPI_strerror(retval));
+        }
+    } else {
+        fprintf(stderr, "PAPI_L2_DCM not supported on this system\n");
+    }
+
     // Open the video file
     VideoCapture cap(argv[1]);
     if (!cap.isOpened()) {
@@ -102,6 +132,12 @@ int main(int argc, char** argv)
         if (!ret || frame.empty()) {
             printf("Last frame reached or error.\n");
             break;
+        }
+
+        // Before grayscale + Sobel for a frame:
+        retval = PAPI_start(EventSet);
+        if (retval != PAPI_OK) {
+            fprintf(stderr, "PAPI_start error: %s\n", PAPI_strerror(retval));
         }
 
         // 1) GRAYSCALE PHASE ------------------------------------
@@ -161,6 +197,15 @@ int main(int argc, char** argv)
             start_time = stop_time;
             count = 0;
 	    printf("Frame Rate: %.2f\n", fps);
+	    // Stop and read the counters
+	    retval = PAPI_stop(EventSet, values);
+	    if (retval != PAPI_OK) {
+	        fprintf(stderr, "PAPI_stop error: %s\n", PAPI_strerror(retval));
+	    }
+
+	    // values[0] corresponds to first event added (e.g. PAPI_L1_DCM)
+	    // values[1] to second (PAPI_L2_DCM)
+	    printf("L1 DCM: %lld, L2 DCM: %lld\n", values[0], values[1]);
         }
 
         //// Draw FPS on sobel_frame
