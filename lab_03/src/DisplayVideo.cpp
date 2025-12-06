@@ -102,7 +102,7 @@ int main(int argc, char** argv )
 		    }
 		    start_time = stop_time;
 		    count = 0;
-		    printf("Frame Rate: %0.2f/n",fps);
+		    printf("Frame Rate: %0.2f\n",fps);
 		}
 
 		//// Draw FPS on sobel_frame

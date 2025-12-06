@@ -134,12 +134,6 @@ int main(int argc, char** argv)
             break;
         }
 
-        // Before grayscale + Sobel for a frame:
-        retval = PAPI_start(EventSet);
-        if (retval != PAPI_OK) {
-            fprintf(stderr, "PAPI_start error: %s\n", PAPI_strerror(retval));
-        }
-
         // 1) GRAYSCALE PHASE ------------------------------------
         pthread_mutex_lock(&mtx);
         for (int i = 0; i < NTHREADS; i++) {
@@ -196,16 +190,7 @@ int main(int argc, char** argv)
             }
             start_time = stop_time;
             count = 0;
-	    printf("Frame Rate: %.2f\n", fps);
-	    // Stop and read the counters
-	    retval = PAPI_stop(EventSet, values);
-	    if (retval != PAPI_OK) {
-	        fprintf(stderr, "PAPI_stop error: %s\n", PAPI_strerror(retval));
-	    }
-
-	    // values[0] corresponds to first event added (e.g. PAPI_L1_DCM)
-	    // values[1] to second (PAPI_L2_DCM)
-	    printf("L1 DCM: %lld, L2 DCM: %lld\n", values[0], values[1]);
+	    printf("Frame Rate: %.2f\n", fps);  
         }
 
         //// Draw FPS on sobel_frame
@@ -342,6 +327,12 @@ void* worker(void* arg)
 {
     int id = (intptr_t)arg;
 
+	// Before grayscale + Sobel for a frame:
+	retval = PAPI_start(EventSet);
+	if (retval != PAPI_OK) {
+		fprintf(stderr, "PAPI_start error: %s\n", PAPI_strerror(retval));
+	}
+
     while (true) {
         // Wait for work or stop signal
         pthread_mutex_lock(&mtx);
@@ -411,6 +402,15 @@ void* worker(void* arg)
         pthread_mutex_unlock(&mtx);
     }
 
+	// Stop and read the counters
+	retval = PAPI_stop(EventSet, values);
+	if (retval != PAPI_OK) {
+		fprintf(stderr, "PAPI_stop error: %s\n", PAPI_strerror(retval));
+	}
+
+	// values[0] corresponds to first event added (e.g. PAPI_L1_DCM)
+	// values[1] to second (PAPI_L2_DCM)
+	printf("L1 DCM: %lld, L2 DCM: %lld\n", values[0], values[1]);
     return nullptr;
 }
 
