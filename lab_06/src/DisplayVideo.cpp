@@ -56,36 +56,6 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    int EventSet = PAPI_NULL;
-    long long values[2]; // one per event
-    int retval;
-
-    // Create an empty event set
-    retval = PAPI_create_eventset(&EventSet);
-    if (retval != PAPI_OK) {
-        fprintf(stderr, "PAPI_create_eventset error: %s\n", PAPI_strerror(retval));
-        exit(1);
-    }
-    
-    // Add events (check availability)
-    if (PAPI_query_event(PAPI_L1_DCM) == PAPI_OK) {
-        retval = PAPI_add_event(EventSet, PAPI_L1_DCM);
-        if (retval != PAPI_OK) {
-            fprintf(stderr, "PAPI_add_event(L1_DCM) error: %s\n", PAPI_strerror(retval));
-        }
-    } else {
-        fprintf(stderr, "PAPI_L1_DCM not supported on this system\n");
-    }
-    
-    if (PAPI_query_event(PAPI_L2_DCM) == PAPI_OK) {
-        retval = PAPI_add_event(EventSet, PAPI_L2_DCM);
-        if (retval != PAPI_OK) {
-            fprintf(stderr, "PAPI_add_event(L2_DCM) error: %s\n", PAPI_strerror(retval));
-        }
-    } else {
-        fprintf(stderr, "PAPI_L2_DCM not supported on this system\n");
-    }
-
     // Open the video file
     VideoCapture cap(argv[1]);
     if (!cap.isOpened()) {
@@ -327,11 +297,41 @@ void* worker(void* arg)
 {
     int id = (intptr_t)arg;
 
-	// Before grayscale + Sobel for a frame:
-	retval = PAPI_start(EventSet);
-	if (retval != PAPI_OK) {
-		fprintf(stderr, "PAPI_start error: %s\n", PAPI_strerror(retval));
-	}
+    int EventSet = PAPI_NULL;
+    long long values[2]; // one per event
+    int retval;
+
+    // Create an empty event set
+    retval = PAPI_create_eventset(&EventSet);
+    if (retval != PAPI_OK) {
+        fprintf(stderr, "PAPI_create_eventset error: %s\n", PAPI_strerror(retval));
+        exit(1);
+    }
+    
+    // Add events (check availability)
+    if (PAPI_query_event(PAPI_L1_DCM) == PAPI_OK) {
+        retval = PAPI_add_event(EventSet, PAPI_L1_DCM);
+        if (retval != PAPI_OK) {
+            fprintf(stderr, "PAPI_add_event(L1_DCM) error: %s\n", PAPI_strerror(retval));
+        }
+    } else {
+        fprintf(stderr, "PAPI_L1_DCM not supported on this system\n");
+    }
+    
+    if (PAPI_query_event(PAPI_L2_DCM) == PAPI_OK) {
+        retval = PAPI_add_event(EventSet, PAPI_L2_DCM);
+        if (retval != PAPI_OK) {
+            fprintf(stderr, "PAPI_add_event(L2_DCM) error: %s\n", PAPI_strerror(retval));
+        }
+    } else {
+        fprintf(stderr, "PAPI_L2_DCM not supported on this system\n");
+    }
+	
+    // Before grayscale + Sobel for a frame:
+    retval = PAPI_start(EventSet);
+    if (retval != PAPI_OK) {
+	    fprintf(stderr, "PAPI_start error: %s\n", PAPI_strerror(retval));
+    }
 
     while (true) {
         // Wait for work or stop signal
