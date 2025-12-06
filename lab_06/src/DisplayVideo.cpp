@@ -20,7 +20,7 @@ struct Task {
     //bool run_sobel;
 };
 
-void sobelTask(const Task& t);
+inline void sobelTask(const Task& t);
 void* worker(void* arg);
 inline uint8x8_t gray_scale(uint8x8x3_t rgb_row);
 
@@ -205,7 +205,7 @@ int main(int argc, char** argv)
 // -----------------------------------------------------------
 // SOBEL TASK (per-thread row range)
 // -----------------------------------------------------------
-void sobelTask(const Task& t)
+inline void sobelTask(const Task& t)
 {
     Mat* rgb_frame = t.src;
     Mat* sobel = t.dst;
