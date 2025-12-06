@@ -50,10 +50,19 @@ int main(int argc, char** argv)
         printf("usage: DisplayVideo <Video_Path>\n");
         return -1;
     }
+    
+    int retval;
 
-    // Init PAPI (for timing)
-    if (PAPI_library_init(PAPI_VER_CURRENT) != PAPI_VER_CURRENT) {
-        fprintf(stderr, "PAPI_library_init error!\n");
+    retval = PAPI_library_init(PAPI_VER_CURRENT);
+    if (retval != PAPI_VER_CURRENT) {
+        fprintf(stderr, "PAPI_library_init error: %s\n", PAPI_strerror(retval));
+        return -1;
+    }
+
+    // Enable PAPI for multithreaded use (with pthreads)
+    retval = PAPI_thread_init((unsigned long (*)(void)) (pthread_self));
+    if (retval != PAPI_OK) {
+        fprintf(stderr, "PAPI_thread_init error: %s\n", PAPI_strerror(retval));
         return -1;
     }
 
@@ -307,124 +316,128 @@ inline void sobelTask(const Task& t)
 // -----------------------------------------------------------
 // WORKER THREAD
 // -----------------------------------------------------------
-void* worker(void* arg)
-{
+void* worker(void* arg) {
     int id = (intptr_t)arg;
 
-    int EventSet = PAPI_NULL;
-    long long values[2]; // one per event
-    int retval;
+    // --- PAPI per-thread setup ---
+    int retval = PAPI_register_thread();
+    if (retval != PAPI_OK) {
+        fprintf(stderr, "Thread %d: PAPI_register_thread error: %s\n",
+                id, PAPI_strerror(retval));
+        // You *can* continue, but counters won't work right.
+    }
 
-    // Create an empty event set
+    int EventSet = PAPI_NULL;
+    long long values[2]      = {0, 0};  // current reading
+    long long prev_values[2] = {0, 0};  // last reading
+    long long accum_L1 = 0;
+    long long accum_L2 = 0;
+    long long frames_counted = 0;
+
     retval = PAPI_create_eventset(&EventSet);
     if (retval != PAPI_OK) {
-        fprintf(stderr, "PAPI_create_eventset error: %s\n", PAPI_strerror(retval));
-        exit(1);
+        fprintf(stderr, "Thread %d: PAPI_create_eventset error: %s\n",
+                id, PAPI_strerror(retval));
     }
-    
-    // Add events (check availability)
+
+    // Add L1 & L2 events if supported
     if (PAPI_query_event(PAPI_L1_DCM) == PAPI_OK) {
         retval = PAPI_add_event(EventSet, PAPI_L1_DCM);
         if (retval != PAPI_OK) {
-            fprintf(stderr, "PAPI_add_event(L1_DCM) error: %s\n", PAPI_strerror(retval));
+            fprintf(stderr, "Thread %d: PAPI_add_event(L1_DCM) error: %s\n",
+                    id, PAPI_strerror(retval));
         }
     } else {
-        fprintf(stderr, "PAPI_L1_DCM not supported on this system\n");
+        fprintf(stderr, "Thread %d: PAPI_L1_DCM not supported\n", id);
     }
-    
+
     if (PAPI_query_event(PAPI_L2_DCM) == PAPI_OK) {
         retval = PAPI_add_event(EventSet, PAPI_L2_DCM);
         if (retval != PAPI_OK) {
-            fprintf(stderr, "PAPI_add_event(L2_DCM) error: %s\n", PAPI_strerror(retval));
+            fprintf(stderr, "Thread %d: PAPI_add_event(L2_DCM) error: %s\n",
+                    id, PAPI_strerror(retval));
         }
     } else {
-        fprintf(stderr, "PAPI_L2_DCM not supported on this system\n");
-    }
-	
-    // Before grayscale + Sobel for a frame:
-    retval = PAPI_start(EventSet);
-    if (retval != PAPI_OK) {
-	    fprintf(stderr, "PAPI_start error: %s\n", PAPI_strerror(retval));
+        fprintf(stderr, "Thread %d: PAPI_L2_DCM not supported\n", id);
     }
 
+    // Start counters ONCE for the lifetime of this worker
+    retval = PAPI_start(EventSet);
+    if (retval != PAPI_OK) {
+        fprintf(stderr, "Thread %d: PAPI_start error: %s\n",
+                id, PAPI_strerror(retval));
+    }
+
+    // --- normal worker loop ---
     while (true) {
-        // Wait for work or stop signal
+        // Wait for work (your existing condvar/mutex logic)
         pthread_mutex_lock(&mtx);
         while (!work_ready && !stop_all) {
             pthread_cond_wait(&cond_work, &mtx);
         }
-
         if (stop_all) {
             pthread_mutex_unlock(&mtx);
             break;
         }
-
-        // Make a local copy of the task to avoid races
-        Task t = tasks[id];
-        // Mark that this thread has consumed current "work_ready" flag.
-        // All threads share the same flag, but we will turn it off in main
-        // only after all have finished (pending == 0).
+        Task t = tasks[id];  // copy task locally
         pthread_mutex_unlock(&mtx);
 
-       // // Run grayscale if requested
-       // if (t.run_gray && t.src && t.dst) {
-       //     for (int r = t.start_row; r < t.end_row; ++r) {
-       //         const uint8_t* src = t.src->ptr<uint8_t>(r);
-       //         uint8_t* dst       = t.dst->ptr<uint8_t>(r);
-
-       //         int cols = t.src->cols;
-       //         int c = 0;
-
-       //         // Vectorized: 8 pixels at a time
-       //         for (; c <= cols - 8; c += 8) {
-       //             // Each pixel: BGR interleaved, so we load from src + 3*c
-       //             uint8x8x3_t pix = vld3_u8(src + 3 * c);
-
-       //             // temp = 29*R + 150*G + 77*B (approx luminance)
-       //             uint16x8_t temp = vmull_u8(pix.val[2], vdup_n_u8(29));   // R
-       //             temp            = vmlal_u8(temp, pix.val[1], vdup_n_u8(150)); // G
-       //             temp            = vmlal_u8(temp, pix.val[0], vdup_n_u8(77));  // B
-
-       //             // >> 8 to normalize
-       //             uint8x8_t gray = vshrn_n_u16(temp, 8);
-       //             vst1_u8(dst + c, gray);
-       //         }
-
-       //         // Scalar tail
-       //         for (; c < cols; ++c) {
-       //             uint8_t b = src[3 * c + 0];
-       //             uint8_t g = src[3 * c + 1];
-       //             uint8_t r = src[3 * c + 2];
-       //             dst[c] = (uint8_t)((29 * r + 150 * g + 77 * b) >> 8);
-       //         }
-       //     }
-       // }
-
-        // Run Sobel if requested
-        if (t.run_filter && t.src && t.dst) {
-            sobelTask(t);
+        // ---- perform the actual work for this frame/phase ----
+        // If fused: gray+sobel happens here
+        if (t.run_gray || t.run_sobel /* or t.run_filter */) {
+            // your processing: grayscale, sobelTask(t), etc.
         }
 
-        // Notify main that this thread finished its portion
+        // ---- PAPI read: compute per-job delta ----
+        retval = PAPI_read(EventSet, values);
+        if (retval == PAPI_OK) {
+            long long dL1 = values[0] - prev_values[0];
+            long long dL2 = values[1] - prev_values[1];
+            prev_values[0] = values[0];
+            prev_values[1] = values[1];
+
+            // Accumulate totals
+            accum_L1 += dL1;
+            accum_L2 += dL2;
+            frames_counted++;
+
+            // Optional: only print every N frames to reduce overhead
+            const int N = 60;
+            if (frames_counted % N == 0) {
+                printf("Thread %d (last %d frames): L1/frame ≈ %.1f, L2/frame ≈ %.1f\n",
+                       id, N,
+                       (double)accum_L1 / (double)frames_counted,
+                       (double)accum_L2 / (double)frames_counted);
+            }
+        } else {
+            fprintf(stderr, "Thread %d: PAPI_read error: %s\n",
+                    id, PAPI_strerror(retval));
+        }
+
+        // ---- notify main that this thread finished its part ----
         pthread_mutex_lock(&mtx);
         pending--;
         if (pending == 0) {
-            // All threads finished current job
             work_ready = false;
             pthread_cond_signal(&cond_done);
         }
         pthread_mutex_unlock(&mtx);
-	
-	// Stop and read the counters
-	retval = PAPI_stop(EventSet, values);
-	if (retval != PAPI_OK) {
-		fprintf(stderr, "PAPI_stop error: %s\n", PAPI_strerror(retval));
-	}
-
-	// values[0] corresponds to first event added (e.g. PAPI_L1_DCM)
-	// values[1] to second (PAPI_L2_DCM)
-	printf("L1 DCM: %lld, L2 DCM: %lld\n", values[0], values[1]);
     }
+
+    // At worker exit: stop and clean up
+    retval = PAPI_stop(EventSet, values);
+    if (retval != PAPI_OK) {
+        fprintf(stderr, "Thread %d: PAPI_stop error: %s\n",
+                id, PAPI_strerror(retval));
+    }
+
+    PAPI_cleanup_eventset(EventSet);
+    PAPI_destroy_eventset(&EventSet);
+    PAPI_unregister_thread();
+
+    printf("Thread %d total: frames=%lld, L1=%lld, L2=%lld\n",
+           id, frames_counted, accum_L1, accum_L2);
+
     return nullptr;
 }
 
