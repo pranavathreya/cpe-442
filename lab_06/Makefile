@@ -6,7 +6,7 @@ BINDIR   := bin
 MEDIADIR := media
 
 # Variables
-VIDFILE := $(MEDIADIR)/Example-Video.mp4
+VIDFILE := $(MEDIADIR)/bbb_sunflower_2160p_60fps_normal.mp4
 
 # Set default option values
 CC = g++				# Compiler of choice

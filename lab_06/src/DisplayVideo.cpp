@@ -16,8 +16,8 @@ struct Task {
     Mat* dst;
     int start_row;
     int end_row;
-    bool run_gray;
-    bool run_sobel;
+    bool run_filter;
+    //bool run_sobel;
 };
 
 void sobelTask(const Task& t);
@@ -82,7 +82,7 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    Mat gray_frame(height, width, CV_8UC1);
+    //Mat gray_frame(height, width, CV_8UC1);
     Mat sobel_frame(height, width, CV_8UC1);
 
     int step = height / NTHREADS;
@@ -108,11 +108,11 @@ int main(int argc, char** argv)
         pthread_mutex_lock(&mtx);
         for (int i = 0; i < NTHREADS; i++) {
             tasks[i].src       = &frame;
-            tasks[i].dst       = &gray_frame;
+            tasks[i].dst       = &sobel_frame;
             tasks[i].start_row = i * step;
             tasks[i].end_row   = (i == NTHREADS - 1) ? height : (i + 1) * step;
-            tasks[i].run_gray  = true;
-            tasks[i].run_sobel = false;
+            tasks[i].run_filter  = true;
+            //tasks[i].run_sobel = false;
         }
         pending    = NTHREADS;
         work_ready = true;
@@ -126,28 +126,28 @@ int main(int argc, char** argv)
         }
         pthread_mutex_unlock(&mtx);
 
-        // 2) SOBEL PHASE ----------------------------------------
-        pthread_mutex_lock(&mtx);
-        for (int i = 0; i < NTHREADS; i++) {
-            tasks[i].src       = &gray_frame;
-            tasks[i].dst       = &sobel_frame;
-            // Same row partition
-            tasks[i].start_row = i * step;
-            tasks[i].end_row   = (i == NTHREADS - 1) ? height : (i + 1) * step;
-            tasks[i].run_gray  = false;
-            tasks[i].run_sobel = true;
-        }
-        pending    = NTHREADS;
-        work_ready = true;
-        pthread_cond_broadcast(&cond_work);
-        pthread_mutex_unlock(&mtx);
+        //// 2) SOBEL PHASE ----------------------------------------
+        //pthread_mutex_lock(&mtx);
+        //for (int i = 0; i < NTHREADS; i++) {
+        //    tasks[i].src       = &gray_frame;
+        //    tasks[i].dst       = &sobel_frame;
+        //    // Same row partition
+        //    tasks[i].start_row = i * step;
+        //    tasks[i].end_row   = (i == NTHREADS - 1) ? height : (i + 1) * step;
+        //    tasks[i].run_gray  = false;
+        //    tasks[i].run_sobel = true;
+        //}
+        //pending    = NTHREADS;
+        //work_ready = true;
+        //pthread_cond_broadcast(&cond_work);
+        //pthread_mutex_unlock(&mtx);
 
-        // Wait for all threads to finish Sobel
-        pthread_mutex_lock(&mtx);
-        while (pending > 0) {
-            pthread_cond_wait(&cond_done, &mtx);
-        }
-        pthread_mutex_unlock(&mtx);
+        //// Wait for all threads to finish Sobel
+        //pthread_mutex_lock(&mtx);
+        //while (pending > 0) {
+        //    pthread_cond_wait(&cond_done, &mtx);
+        //}
+        //pthread_mutex_unlock(&mtx);
 
         // FPS measurement every 10 frames
         count++;
@@ -229,17 +229,30 @@ void sobelTask(const Task& t)
         int j_vec_end = (cols >= 10) ? (cols - 9) : 0;
 
         for (; j <= j_vec_end; j += 8) {
+	    // Each pixel: BGR interleaved, so we load from src + 3*c
             // Load neighbors in 8-wide chunks
-            uint8x8_t pL = vld1_u8(prevRow + (j - 1));
-            uint8x8_t pC = vld1_u8(prevRow + (j    ));
-            uint8x8_t pR = vld1_u8(prevRow + (j + 1));
+            uint8x8x3_t pL_rgb = vld3_u8((prevRow + (j - 1))+3*j);
+            uint8x8x3_t pC_rgb = vld3_u8((prevRow + (j    ))+3*j);
+            uint8x8x3_t pR_rgb = vld3_u8((prevRow + (j + 1))+3*j);
 
-            uint8x8_t cL = vld1_u8(currRow + (j - 1));
-            uint8x8_t cR = vld1_u8(currRow + (j + 1));
+            uint8x8x3_t cL_rgb = vld3_u8((currRow + (j - 1))+3*j);
+            uint8x8x3_t cR_rgb = vld3_u8((currRow + (j + 1))+3*j);
 
-            uint8x8_t nL = vld1_u8(nextRow + (j - 1));
-            uint8x8_t nC = vld1_u8(nextRow + (j    ));
-            uint8x8_t nR = vld1_u8(nextRow + (j + 1));
+            uint8x8x3_t nL_rgb = vld3_u8((nextRow + (j - 1))+3*j);
+            uint8x8x3_t nC_rgb = vld3_u8((nextRow + (j    ))+3*j);
+            uint8x8x3_t nR_rgb = vld3_u8((nextRow + (j + 1))+3*j);
+
+            // Load neighbors in 8-wide chunks
+            uint8x8_t pL = gray_scale(pL_rgb);
+            uint8x8_t pC = gray_scale(pC_rgb);
+            uint8x8_t pR = gray_scale(pR_rgb);
+
+            uint8x8_t cL = gray_scale(cL_rgb);
+            uint8x8_t cR = gray_scale(cR_rgb);
+
+            uint8x8_t nL = gray_scale(nL_rgb);
+            uint8x8_t nC = gray_scale(nC_rgb);
+            uint8x8_t nR = gray_scale(nR_rgb);
 
             // Extend to signed 16-bit
             int16x8_t pL16 = vreinterpretq_s16_u16(vmovl_u8(pL));
@@ -352,42 +365,42 @@ void* worker(void* arg)
         // only after all have finished (pending == 0).
         pthread_mutex_unlock(&mtx);
 
-        // Run grayscale if requested
-        if (t.run_gray && t.src && t.dst) {
-            for (int r = t.start_row; r < t.end_row; ++r) {
-                const uint8_t* src = t.src->ptr<uint8_t>(r);
-                uint8_t* dst       = t.dst->ptr<uint8_t>(r);
+       // // Run grayscale if requested
+       // if (t.run_gray && t.src && t.dst) {
+       //     for (int r = t.start_row; r < t.end_row; ++r) {
+       //         const uint8_t* src = t.src->ptr<uint8_t>(r);
+       //         uint8_t* dst       = t.dst->ptr<uint8_t>(r);
 
-                int cols = t.src->cols;
-                int c = 0;
+       //         int cols = t.src->cols;
+       //         int c = 0;
 
-                // Vectorized: 8 pixels at a time
-                for (; c <= cols - 8; c += 8) {
-                    // Each pixel: BGR interleaved, so we load from src + 3*c
-                    uint8x8x3_t pix = vld3_u8(src + 3 * c);
+       //         // Vectorized: 8 pixels at a time
+       //         for (; c <= cols - 8; c += 8) {
+       //             // Each pixel: BGR interleaved, so we load from src + 3*c
+       //             uint8x8x3_t pix = vld3_u8(src + 3 * c);
 
-                    // temp = 29*R + 150*G + 77*B (approx luminance)
-                    uint16x8_t temp = vmull_u8(pix.val[2], vdup_n_u8(29));   // R
-                    temp            = vmlal_u8(temp, pix.val[1], vdup_n_u8(150)); // G
-                    temp            = vmlal_u8(temp, pix.val[0], vdup_n_u8(77));  // B
+       //             // temp = 29*R + 150*G + 77*B (approx luminance)
+       //             uint16x8_t temp = vmull_u8(pix.val[2], vdup_n_u8(29));   // R
+       //             temp            = vmlal_u8(temp, pix.val[1], vdup_n_u8(150)); // G
+       //             temp            = vmlal_u8(temp, pix.val[0], vdup_n_u8(77));  // B
 
-                    // >> 8 to normalize
-                    uint8x8_t gray = vshrn_n_u16(temp, 8);
-                    vst1_u8(dst + c, gray);
-                }
+       //             // >> 8 to normalize
+       //             uint8x8_t gray = vshrn_n_u16(temp, 8);
+       //             vst1_u8(dst + c, gray);
+       //         }
 
-                // Scalar tail
-                for (; c < cols; ++c) {
-                    uint8_t b = src[3 * c + 0];
-                    uint8_t g = src[3 * c + 1];
-                    uint8_t r = src[3 * c + 2];
-                    dst[c] = (uint8_t)((29 * r + 150 * g + 77 * b) >> 8);
-                }
-            }
-        }
+       //         // Scalar tail
+       //         for (; c < cols; ++c) {
+       //             uint8_t b = src[3 * c + 0];
+       //             uint8_t g = src[3 * c + 1];
+       //             uint8_t r = src[3 * c + 2];
+       //             dst[c] = (uint8_t)((29 * r + 150 * g + 77 * b) >> 8);
+       //         }
+       //     }
+       // }
 
         // Run Sobel if requested
-        if (t.run_sobel && t.src && t.dst) {
+        if (t.run_filter && t.src && t.dst) {
             sobelTask(t);
         }
 
@@ -414,3 +427,15 @@ void* worker(void* arg)
     return nullptr;
 }
 
+
+inline uint8x8_t gray_scale(uint8x8x3_t rgb_row) {
+    // temp = 29*R + 150*G + 77*B (approx luminance)
+    uint16x8_t temp = vmull_u8(rgb_row.val[2], vdup_n_u8(29));   // R
+    temp            = vmlal_u8(temp, rgb_row.val[1], vdup_n_u8(150)); // G
+    temp            = vmlal_u8(temp, rgb_row.val[0], vdup_n_u8(77));  // B
+
+    // >> 8 to normalize
+    uint8x8_t gray_row = vshrn_n_u16(temp, 8);
+
+    return gray_row;
+}
