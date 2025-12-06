@@ -207,20 +207,20 @@ int main(int argc, char** argv)
 // -----------------------------------------------------------
 void sobelTask(const Task& t)
 {
-    Mat* gray  = t.src;
+    Mat* rgb_frame = t.src;
     Mat* sobel = t.dst;
 
-    const int rows = gray->rows;
-    const int cols = gray->cols;
+    const int rows = rgb_frame->rows;
+    const int cols = rgb_frame->cols;
 
     // Clamp boundaries (Sobel needs neighbors)
     int start_row = std::max(1, t.start_row);
     int end_row   = std::min(rows - 1, t.end_row);
 
     for (int i = start_row; i < end_row; i++) {
-        const uint8_t* prevRow = gray->ptr<uint8_t>(i - 1);
-        const uint8_t* currRow = gray->ptr<uint8_t>(i);
-        const uint8_t* nextRow = gray->ptr<uint8_t>(i + 1);
+        const uint8_t* prevRow = rgb_frame->ptr<uint8_t>(i - 1);
+        const uint8_t* currRow = rgb_frame->ptr<uint8_t>(i);
+        const uint8_t* nextRow = rgb_frame->ptr<uint8_t>(i + 1);
 
         uint8_t* outRow = sobel->ptr<uint8_t>(i);
 
@@ -232,16 +232,16 @@ void sobelTask(const Task& t)
         for (; j <= j_vec_end; j += 8) {
 	    // Each pixel: BGR interleaved, so we load from src + 3*c
             // Load neighbors in 8-wide chunks
-            uint8x8x3_t pL_rgb = vld3_u8((prevRow + (j - 1))+3*j);
-            uint8x8x3_t pC_rgb = vld3_u8((prevRow + (j    ))+3*j);
-            uint8x8x3_t pR_rgb = vld3_u8((prevRow + (j + 1))+3*j);
+            uint8x8x3_t pL_rgb = vld3_u8(prevRow + 3*(j - 1));
+            uint8x8x3_t pC_rgb = vld3_u8(prevRow + 3*(j    ));
+            uint8x8x3_t pR_rgb = vld3_u8(prevRow + 3*(j + 1));
 
-            uint8x8x3_t cL_rgb = vld3_u8((currRow + (j - 1))+3*j);
-            uint8x8x3_t cR_rgb = vld3_u8((currRow + (j + 1))+3*j);
+            uint8x8x3_t cL_rgb = vld3_u8(currRow + 3*(j - 1));
+            uint8x8x3_t cR_rgb = vld3_u8(currRow + 3*(j + 1));
 
-            uint8x8x3_t nL_rgb = vld3_u8((nextRow + (j - 1))+3*j);
-            uint8x8x3_t nC_rgb = vld3_u8((nextRow + (j    ))+3*j);
-            uint8x8x3_t nR_rgb = vld3_u8((nextRow + (j + 1))+3*j);
+            uint8x8x3_t nL_rgb = vld3_u8(nextRow + 3*(j - 1));
+            uint8x8x3_t nC_rgb = vld3_u8(nextRow + 3*(j    ));
+            uint8x8x3_t nR_rgb = vld3_u8(nextRow + 3*(j + 1));
 
             // Load neighbors in 8-wide chunks
             uint8x8_t pL = gray_scale(pL_rgb);
