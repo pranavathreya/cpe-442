@@ -22,6 +22,7 @@ struct Task {
 
 void sobelTask(const Task& t);
 void* worker(void* arg);
+inline uint8x8_t gray_scale(uint8x8x3_t rgb_row);
 
 // Globals for worker coordination
 Task tasks[NTHREADS];
