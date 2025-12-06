@@ -400,8 +400,7 @@ void* worker(void* arg)
             pthread_cond_signal(&cond_done);
         }
         pthread_mutex_unlock(&mtx);
-    }
-
+	
 	// Stop and read the counters
 	retval = PAPI_stop(EventSet, values);
 	if (retval != PAPI_OK) {
@@ -411,6 +410,7 @@ void* worker(void* arg)
 	// values[0] corresponds to first event added (e.g. PAPI_L1_DCM)
 	// values[1] to second (PAPI_L2_DCM)
 	printf("L1 DCM: %lld, L2 DCM: %lld\n", values[0], values[1]);
+    }
     return nullptr;
 }
 
