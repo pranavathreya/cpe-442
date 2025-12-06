@@ -384,7 +384,7 @@ void* worker(void* arg) {
 
         // ---- perform the actual work for this frame/phase ----
         // If fused: gray+sobel happens here
-        if (t.run_gray || t.run_sobel /* or t.run_filter */) {
+        if (t.run_filter) {
             // your processing: grayscale, sobelTask(t), etc.
         }
 
